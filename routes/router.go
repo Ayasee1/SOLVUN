@@ -9,6 +9,11 @@ import (
 
 // SetupRoutes sets up the routes for the Fiber application
 func SetupRoutes(app *fiber.App, ph *handler.ProductHandler, oh *handler.OrderHandler, sh *handler.ShippingHandler, sc *handler.StoreConfigHandler, adminAPIKey string) {
+	// health check for deploys and uptime probes
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "ok", "service": "golearn"})
+	})
+
 	// public storefront
 	app.Get("/store/config", sc.Get)
 	app.Get("/products", ph.GetProducts)
