@@ -9,3 +9,5 @@ dist/
 admin/dist/
 web/dist/
 *.log
+
+.monocode/
