@@ -1,0 +1,42 @@
+{
+  "id": 2,
+  "name": "Clothing",
+  "items": [
+    {
+      "id": 4,
+      "name": "T-Shirt",
+      "description": "100% cotton, regular fit.",
+      "images": [
+        "https://placehold.co/600x400?text=T-Shirt"
+      ],
+      "price": 50,
+      "stock": 20,
+      "is_available": true,
+      "weight_gram": 150
+    },
+    {
+      "id": 5,
+      "name": "Jeans",
+      "description": "Slim fit denim, mid rise.",
+      "images": [
+        "https://placehold.co/600x400?text=Jeans"
+      ],
+      "price": 100,
+      "stock": 30,
+      "is_available": true,
+      "weight_gram": 400
+    },
+    {
+      "id": 6,
+      "name": "Jacket",
+      "description": "Water resistant shell, packable.",
+      "images": [
+        "https://placehold.co/600x400?text=Jacket"
+      ],
+      "price": 150,
+      "stock": 40,
+      "is_available": true,
+      "weight_gram": 600
+    }
+  ]
+}
