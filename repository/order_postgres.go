@@ -86,6 +86,32 @@ func (r *PostgresOrderRepository) GetAll(status model.OrderStatus) ([]model.User
 	return orders, rows.Err()
 }
 
+// GetStalePending returns pending orders created before the cutoff. The sweeper
+// uses it to release stock held by orders whose payment never completed.
+func (r *PostgresOrderRepository) GetStalePending(before time.Time) ([]model.UserOrder, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE status = $1 AND created_at < $2 ORDER BY created_at`,
+		string(model.OrderStatusPending), before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	orders := make([]model.UserOrder, 0)
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, *order)
+	}
+
+	return orders, rows.Err()
+}
+
 func (r *PostgresOrderRepository) FindByID(id uuid.UUID) (*model.UserOrder, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()

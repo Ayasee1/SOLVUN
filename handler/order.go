@@ -21,7 +21,10 @@ import (
 
 // errShippingUnavailable is returned when the requested courier/service is not
 // offered by the provider for this destination.
-var errShippingUnavailable = errors.New("shipping option is not available")
+var (
+	errShippingUnavailable   = errors.New("shipping option is not available")
+	errPaymentAmountMismatch = errors.New("payment amount mismatch")
+)
 
 type OrderHandler struct {
 	productRepo  repository.ProductRepository
@@ -30,6 +33,9 @@ type OrderHandler struct {
 	mailer       notification.Sender
 	shipping     shipping.Provider
 	storeBaseURL string
+	storeLat     float64
+	storeLon     float64
+	storeAddress string
 }
 
 func NewOrderHandler(productRepo repository.ProductRepository, orderRepo repository.OrderRepository, gateway payment.Gateway, mailer notification.Sender, shippingProvider shipping.Provider, storeBaseURL string) *OrderHandler {
@@ -41,6 +47,13 @@ func NewOrderHandler(productRepo repository.ProductRepository, orderRepo reposit
 		shipping:     shippingProvider,
 		storeBaseURL: storeBaseURL,
 	}
+}
+
+// SetStoreOrigin lets the public order page draw the store-to-customer route.
+func (h *OrderHandler) SetStoreOrigin(lat, lon float64, address string) {
+	h.storeLat = lat
+	h.storeLon = lon
+	h.storeAddress = address
 }
 
 // orderPageURL is the public page the customer can open to follow the order.
@@ -190,6 +203,10 @@ func (h *OrderHandler) CreateOrder(c *fiber.Ctx) error {
 	order.PaymentURL = charge.RedirectURL
 
 	if err := h.orderRepo.Save(order); err != nil {
+		log.Printf("failed to save order %s: %v", order.ID, err)
+		// the payment session was already created but the order was not stored,
+		// so give the reserved stock back instead of leaking it
+		_ = h.productRepo.ReleaseStock(requested)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to save order",
 		})
@@ -280,13 +297,26 @@ func (h *OrderHandler) Notification(c *fiber.Ctx) error {
 // arrive after the order expired (the sweeper released the stock), so for those
 // cases it tries to reserve the stock again, or flags the order for refund.
 func (h *OrderHandler) settlePayment(c *fiber.Ctx, order *model.UserOrder, status *payment.StatusResult) error {
+	if err := h.settlePaidOrder(order, status); err != nil {
+		if errors.Is(err, errPaymentAmountMismatch) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "Payment amount mismatch",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to update order",
+		})
+	}
+
+	return c.SendString("ok")
+}
+
+func (h *OrderHandler) settlePaidOrder(order *model.UserOrder, status *payment.StatusResult) error {
 	// Midtrans reports the amount as a decimal string (e.g. "1000.00"),
 	// even though IDR has no cents.
 	amount, err := strconv.ParseFloat(status.GrossAmount, 64)
 	if err != nil || int64(math.Round(amount)) != int64(order.Total) {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Payment amount mismatch",
-		})
+		return errPaymentAmountMismatch
 	}
 
 	info := model.PaymentInfo{
@@ -305,7 +335,7 @@ func (h *OrderHandler) settlePayment(c *fiber.Ctx, order *model.UserOrder, statu
 	switch order.Status {
 	case model.OrderStatusPaid, model.OrderStatusNeedsRefund:
 		// duplicate notification: already handled (idempotent)
-		return c.SendString("ok")
+		return nil
 
 	case model.OrderStatusExpired, model.OrderStatusCancelled:
 		// late payment: stock was released, try to take it back
@@ -316,20 +346,16 @@ func (h *OrderHandler) settlePayment(c *fiber.Ctx, order *model.UserOrder, statu
 		if err := h.productRepo.DecreaseStock(requested); err != nil {
 			// the order can no longer be fulfilled -> the customer must be refunded
 			if _, _, err := h.orderRepo.TransitionStatusWithPayment(order.ID, order.Status, model.OrderStatusNeedsRefund, info); err != nil {
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-					"error": "Failed to update order",
-				})
+				return err
 			}
-			return c.SendString("ok")
+			return nil
 		}
 	}
 
 	// stock is reserved (or just re-reserved) -> confirm the payment
 	updated, confirmed, err := h.orderRepo.TransitionStatusWithPayment(order.ID, order.Status, model.OrderStatusPaid, info)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to update order",
-		})
+		return err
 	}
 
 	// only when this call actually confirmed the order (idempotent webhooks)
@@ -340,7 +366,39 @@ func (h *OrderHandler) settlePayment(c *fiber.Ctx, order *model.UserOrder, statu
 		h.sendPaidEmail(*updated)
 	}
 
-	return c.SendString("ok")
+	return nil
+}
+
+// reconcilePendingOrder is the fallback for local/dev setups where the Midtrans
+// webhook cannot reach the server. It asks Midtrans for the authoritative status
+// whenever a pending order page is loaded (the page refreshes itself).
+func (h *OrderHandler) reconcilePendingOrder(order *model.UserOrder) {
+	if order.Status != model.OrderStatusPending {
+		return
+	}
+
+	status, err := h.gateway.CheckStatus(order.ID.String())
+	if err != nil {
+		log.Printf("order %s: could not verify payment: %v", order.ID, err)
+		return
+	}
+
+	switch status.TransactionStatus {
+	case "capture":
+		if status.FraudStatus == "accept" {
+			h.settleReconciled(order, status)
+		}
+	case "settlement":
+		h.settleReconciled(order, status)
+	case "cancel", "expire":
+		h.expireOrder(order.ID)
+	}
+}
+
+func (h *OrderHandler) settleReconciled(order *model.UserOrder, status *payment.StatusResult) {
+	if err := h.settlePaidOrder(order, status); err != nil {
+		log.Printf("order %s: payment reconciliation failed: %v", order.ID, err)
+	}
 }
 
 // createShipment hands the paid order to the shipping provider. Failures are

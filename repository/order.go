@@ -2,6 +2,7 @@ package repository
 
 import (
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -13,6 +14,9 @@ type OrderRepository interface {
 	Save(order model.UserOrder) error
 	// GetAll returns orders, optionally filtered by status ("" means all).
 	GetAll(status model.OrderStatus) ([]model.UserOrder, error)
+	// GetStalePending returns pending orders created before the cutoff, used by
+	// the sweeper to expire orders whose payment never completed.
+	GetStalePending(before time.Time) ([]model.UserOrder, error)
 	FindByID(id uuid.UUID) (*model.UserOrder, error)
 	TransitionStatus(id uuid.UUID, from, to model.OrderStatus) (*model.UserOrder, bool, error)
 	TransitionStatusWithPayment(id uuid.UUID, from, to model.OrderStatus, info model.PaymentInfo) (*model.UserOrder, bool, error)
@@ -53,6 +57,19 @@ func (r *MemoryOrderRepository) GetAll(status model.OrderStatus) ([]model.UserOr
 			continue
 		}
 		out = append(out, order)
+	}
+	return out, nil
+}
+
+func (r *MemoryOrderRepository) GetStalePending(before time.Time) ([]model.UserOrder, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]model.UserOrder, 0)
+	for _, order := range r.orders {
+		if order.Status == model.OrderStatusPending && order.CreatedAt.Before(before) {
+			out = append(out, order)
+		}
 	}
 	return out, nil
 }

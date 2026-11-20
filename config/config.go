@@ -42,6 +42,11 @@ type Config struct {
 	// MidtransExpiryMinutes shortens the Snap payment window. 0 keeps the
 	// Midtrans default (24 hours); a small value is handy to test expiry.
 	MidtransExpiryMinutes int
+	// OrderPendingTTLMinutes is how long an unpaid order keeps its stock
+	// reserved before the sweeper expires it.
+	OrderPendingTTLMinutes int
+	// OrderSweepIntervalSeconds is how often the sweeper looks for stale orders.
+	OrderSweepIntervalSeconds int
 }
 
 // Load reads configuration from the environment, falling back to safe defaults.
@@ -55,12 +60,15 @@ func Load() Config {
 		MidtransClientKey:     os.Getenv("MIDTRANS_CLIENT_KEY"),
 		MidtransEnv:           getEnv("MIDTRANS_ENV", "sandbox"),
 		MidtransExpiryMinutes: getEnvInt("MIDTRANS_EXPIRY_MINUTES", 0),
-		ResendAPIKey:          os.Getenv("RESEND_API_KEY"),
-		SMTPHost:              os.Getenv("SMTP_HOST"),
-		SMTPPort:              getEnv("SMTP_PORT", "587"),
-		SMTPUser:              os.Getenv("SMTP_USER"),
-		SMTPPass:              os.Getenv("SMTP_PASS"),
-		MailFrom:              getEnv("MAIL_FROM", "Golearn Store <no-reply@golearn.local>"),
+
+		OrderPendingTTLMinutes:    getEnvInt("ORDER_PENDING_TTL_MINUTES", 20),
+		OrderSweepIntervalSeconds: getEnvInt("ORDER_SWEEP_INTERVAL_SECONDS", 60),
+		ResendAPIKey:              os.Getenv("RESEND_API_KEY"),
+		SMTPHost:                  os.Getenv("SMTP_HOST"),
+		SMTPPort:                  getEnv("SMTP_PORT", "587"),
+		SMTPUser:                  os.Getenv("SMTP_USER"),
+		SMTPPass:                  os.Getenv("SMTP_PASS"),
+		MailFrom:                  getEnv("MAIL_FROM", "Solvun <no-reply@solvun.local>"),
 
 		ShippingProvider:      os.Getenv("SHIPPING_PROVIDER"),
 		ShippingFlatRates:     os.Getenv("SHIPPING_FLAT_RATES"),
@@ -69,7 +77,7 @@ func Load() Config {
 		StoreOriginPostalCode: os.Getenv("STORE_ORIGIN_POSTAL_CODE"),
 		StoreOriginLat:        getEnvFloat("STORE_ORIGIN_LAT", 0),
 		StoreOriginLon:        getEnvFloat("STORE_ORIGIN_LON", 0),
-		StoreOriginContact:    getEnv("STORE_ORIGIN_CONTACT", "Golearn Store"),
+		StoreOriginContact:    getEnv("STORE_ORIGIN_CONTACT", "Solvun"),
 		StoreOriginPhone:      getEnv("STORE_ORIGIN_PHONE", ""),
 		StoreOriginAddress:    getEnv("STORE_ORIGIN_ADDRESS", ""),
 		StoreCollectionMethod: getEnv("STORE_COLLECTION_METHOD", "pickup"),

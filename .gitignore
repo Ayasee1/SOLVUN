@@ -9,5 +9,9 @@ dist/
 admin/dist/
 web/dist/
 *.log
+.DS_Store
+
+# source assets (PSD/large originals) stay local; optimized files live in web/public
+web/source-images/
 
 .monocode/

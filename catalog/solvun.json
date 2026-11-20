@@ -1,0 +1,32 @@
+{
+  "id": 1,
+  "name": "Solvun",
+  "items": [
+    {
+      "id": 101,
+      "name": "Denim Jacket Type 01",
+      "description": "Heavyweight indigo denim with a boxy cut, metal toggle closures and contrast stitching. Washed for a lived-in hand.",
+      "images": [
+        "/images/products/DSC00441.JPG",
+        "/images/products/DSC00366.JPG"
+      ],
+      "price": 1250000,
+      "stock": 12,
+      "is_available": true,
+      "weight_gram": 900
+    },
+    {
+      "id": 102,
+      "name": "Campaign Tote",
+      "description": "Structured canvas tote printed with the first Solvun campaign portrait. Made for records, books and late nights.",
+      "images": [
+        "/images/campaign/DSC00469.JPG",
+        "/images/campaign/DSC00468.JPG"
+      ],
+      "price": 350000,
+      "stock": 24,
+      "is_available": true,
+      "weight_gram": 450
+    }
+  ]
+}
