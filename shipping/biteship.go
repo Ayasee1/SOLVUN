@@ -41,7 +41,7 @@ func (b *Biteship) Rates(req RateRequest) ([]Rate, error) {
 	draftBody := map[string]any{
 		"shipper_contact_name":      b.origin.ContactName,
 		"shipper_contact_phone":     b.origin.ContactPhone,
-		"shipper_organization":      "Golearn Store",
+		"shipper_organization":      "Solvun",
 		"origin_contact_name":       b.origin.ContactName,
 		"origin_contact_phone":      b.origin.ContactPhone,
 		"origin_address":            b.origin.Address,
@@ -134,7 +134,7 @@ func (b *Biteship) CreateShipment(req ShipmentRequest) (*Shipment, error) {
 		"reference_id":              req.ReferenceID,
 		"shipper_contact_name":      b.origin.ContactName,
 		"shipper_contact_phone":     b.origin.ContactPhone,
-		"shipper_organization":      "Golearn Store",
+		"shipper_organization":      "Solvun",
 		"origin_contact_name":       b.origin.ContactName,
 		"origin_contact_phone":      b.origin.ContactPhone,
 		"origin_address":            b.origin.Address,

@@ -47,7 +47,7 @@ func Generate(order model.UserOrder) ([]byte, error) {
 
 	// header: brand + document label
 	doc.AddRow(6,
-		text.NewCol(6, "GOLEARN STORE", brand),
+		text.NewCol(6, "SOLVUN", brand),
 		text.NewCol(6, "INVOICE", docLabel),
 	)
 

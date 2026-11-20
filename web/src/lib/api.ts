@@ -54,6 +54,7 @@ export type ShippingRate = {
   courier_name: string
   service: string
   service_name: string
+  description?: string
   duration?: string
   price: number
 }

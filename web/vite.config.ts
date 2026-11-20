@@ -21,6 +21,7 @@ export default defineConfig({
   },
   server: {
     port: 5174,
+    allowedHosts: true,
     proxy: {
       '/api': { ...api, rewrite: (p) => p.replace(/^\/api/, '') },
       // pages rendered by the Go app (order status, tracking, invoice)

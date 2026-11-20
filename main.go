@@ -4,13 +4,19 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 	_ "time/tzdata" // embed tzdata so TZ works in minimal containers
 
 	// fiber
 	"github.com/gofiber/fiber/v2"
 	// cors
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	// panic recovery
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	// env
 	"github.com/joho/godotenv"
 	// catalog
@@ -33,11 +39,17 @@ import (
 	"golearn/routes"
 	// shipping
 	"golearn/shipping"
+	// sweeper
+	"golearn/sweeper"
 )
 
 func main() {
 	// Load .env if present (ignored in production where real env vars are used)
 	_ = godotenv.Load()
+
+	// cancel on SIGINT/SIGTERM so the sweeper stops and in-flight requests drain
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	cfg := config.Load()
 
@@ -50,8 +62,6 @@ func main() {
 		productRepo = repository.NewMemoryProductRepository()
 		orderRepo = repository.NewMemoryOrderRepository()
 	} else {
-		ctx := context.Background()
-
 		pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 		if err != nil {
 			log.Fatalf("database connection failed: %v", err)
@@ -109,11 +119,22 @@ func main() {
 
 	productHandler := handler.NewProductHandler(productRepo)
 	orderHandler := handler.NewOrderHandler(productRepo, orderRepo, paymentGateway, mailer, shippingProvider, cfg.StoreBaseURL)
+	orderHandler.SetStoreOrigin(cfg.StoreOriginLat, cfg.StoreOriginLon, cfg.StoreOriginAddress)
 	shippingHandler := handler.NewShippingHandler(shippingProvider, productRepo)
 	storeConfigHandler := handler.NewStoreConfigHandler(cfg.MidtransClientKey, cfg.MidtransEnv)
 
+	// Expire unpaid orders so their reserved stock returns to the catalog even
+	// when the payment webhook never arrives.
+	orderSweeper := sweeper.New(orderRepo, productRepo,
+		time.Duration(cfg.OrderPendingTTLMinutes)*time.Minute,
+		time.Duration(cfg.OrderSweepIntervalSeconds)*time.Second)
+	go orderSweeper.Run(ctx)
+
 	// Create a new Fiber instance
 	app := fiber.New()
+
+	// Recover panics so one bad request cannot take the process down.
+	app.Use(recover.New())
 
 	// CORS: restrict to configured origins in production
 	app.Use(cors.New(cors.Config{
@@ -123,8 +144,19 @@ func main() {
 	// Setup routes
 	routes.SetupRoutes(app, productHandler, orderHandler, shippingHandler, storeConfigHandler, cfg.AdminAPIKey)
 
-	// Start the server
-	app.Listen(":" + cfg.Port)
+	// Start the server, then wait for a shutdown signal.
+	go func() {
+		if err := app.Listen(":" + cfg.Port); err != nil {
+			log.Printf("server stopped: %v", err)
+			stop()
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("shutting down server...")
+	if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
+		log.Printf("graceful shutdown failed: %v", err)
+	}
 }
 
 // buildShippingProvider picks the provider from config, so switching between

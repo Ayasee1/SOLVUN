@@ -244,7 +244,7 @@ func layout(body string) string {
 	return fmt.Sprintf(`
 		<div style="background:#f4f4f5;padding:40px 20px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">
 			<div style="max-width:540px;margin:0 auto">
-				<p style="margin:0 0 20px;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:%s">Golearn Store</p>
+				<p style="margin:0 0 20px;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:%s">Solvun</p>
 				<div style="background:#ffffff;border:1px solid %s;border-radius:12px;padding:28px">
 					%s
 				</div>
