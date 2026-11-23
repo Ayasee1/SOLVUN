@@ -13,7 +13,7 @@ React admin dashboard.
 ## Requirements
 
 - Go 1.26+
-- Node 20+ and pnpm
+- Node 20+ and Bun 1.3+
 - Postgres (optional in development; without `DATABASE_URL` the API uses
   in-memory repositories and data is lost on restart)
 
@@ -43,8 +43,8 @@ schema is created and the catalog is seeded automatically at startup.
 
 ```bash
 cd web
-pnpm install
-pnpm dev
+bun install
+bun run dev
 ```
 
 The dev server runs on `http://localhost:5174` and proxies `/api`, `/order`,
@@ -54,8 +54,8 @@ The dev server runs on `http://localhost:5174` and proxies `/api`, `/order`,
 
 ```bash
 cd admin
-pnpm install
-VITE_ADMIN_API_KEY=<same value as ADMIN_API_KEY> pnpm dev
+bun install
+VITE_ADMIN_API_KEY=<same value as ADMIN_API_KEY> bun run dev
 ```
 
 ## Tests
@@ -66,8 +66,8 @@ go vet ./...
 ```
 
 ```bash
-cd web && pnpm build
-cd admin && pnpm test
+cd web && bun run build
+cd admin && bun run test
 ```
 
 ## Order lifecycle
