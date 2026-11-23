@@ -1,11 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ConfigDrawer } from '@/components/config-drawer'
-import { Header } from '@/components/layout/header'
-import { Main } from '@/components/layout/main'
-import { ProfileDropdown } from '@/components/profile-dropdown'
-import { Search } from '@/components/search'
-import { ThemeSwitch } from '@/components/theme-switch'
+import { queryWithToast } from '@/lib/query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,6 +14,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ConfigDrawer } from '@/components/config-drawer'
+import { Header } from '@/components/layout/header'
+import { Main } from '@/components/layout/main'
+import { ProfileDropdown } from '@/components/profile-dropdown'
+import { Search } from '@/components/search'
+import { ThemeSwitch } from '@/components/theme-switch'
 import { fetchProducts, updateProduct } from './api'
 import { EditProductDialog } from './components/edit-product-dialog'
 import type { Product } from './data/schema'
@@ -40,26 +42,18 @@ function formatDate(value: string) {
 }
 
 export function Products() {
-  const [products, setProducts] = useState<Product[]>([])
-  const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState<Product | null>(null)
   const [togglingId, setTogglingId] = useState<number | null>(null)
+  const queryClient = useQueryClient()
+  const productsQuery = useQuery({
+    queryKey: ['products'],
+    queryFn: () => queryWithToast(fetchProducts),
+    retry: false,
+  })
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      setProducts(await fetchProducts())
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to load products')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+  const products = productsQuery.data ?? []
+  const loading = productsQuery.isLoading
 
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -75,8 +69,8 @@ export function Products() {
       const updated = await updateProduct(product.id, {
         is_available: !product.is_available,
       })
-      setProducts((current) =>
-        current.map((item) => (item.id === updated.id ? updated : item))
+      queryClient.setQueryData<Product[]>(['products'], (current) =>
+        current?.map((item) => (item.id === updated.id ? updated : item))
       )
       toast.success(
         `${updated.name} is now ${updated.is_available ? 'available' : 'hidden'}`
@@ -115,7 +109,10 @@ export function Products() {
               onChange={(event) => setSearch(event.target.value)}
               className='w-56'
             />
-            <Button variant='outline' onClick={() => void load()}>
+            <Button
+              variant='outline'
+              onClick={() => void productsQuery.refetch()}
+            >
               Refresh
             </Button>
           </div>
@@ -148,7 +145,7 @@ export function Products() {
                 <TableRow>
                   <TableCell
                     colSpan={7}
-                    className='text-muted-foreground h-24 text-center'
+                    className='h-24 text-center text-muted-foreground'
                   >
                     No products found.
                   </TableCell>
@@ -164,7 +161,7 @@ export function Products() {
                     <TableCell className='max-w-80'>
                       <div className='font-medium'>{product.name}</div>
                       {product.description && (
-                        <div className='text-muted-foreground truncate text-xs'>
+                        <div className='truncate text-xs text-muted-foreground'>
                           {product.description}
                         </div>
                       )}
@@ -187,7 +184,7 @@ export function Products() {
                         {product.is_available ? 'available' : 'hidden'}
                       </Badge>
                     </TableCell>
-                    <TableCell className='text-muted-foreground text-xs'>
+                    <TableCell className='text-xs text-muted-foreground'>
                       {formatDate(product.updated_at)}
                     </TableCell>
                     <TableCell>
@@ -213,9 +210,10 @@ export function Products() {
       </Main>
 
       <EditProductDialog
+        key={editing?.id ?? 'closed'}
         product={editing}
         onClose={() => setEditing(null)}
-        onSaved={() => void load()}
+        onSaved={() => void productsQuery.refetch()}
       />
     </>
   )

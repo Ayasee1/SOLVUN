@@ -10,7 +10,7 @@ const rupiah = new Intl.NumberFormat('id-ID', {
 
 export function RecentOrders({ orders }: { orders: Order[] }) {
   if (orders.length === 0) {
-    return <p className='text-muted-foreground text-sm'>No orders yet.</p>
+    return <p className='text-sm text-muted-foreground'>No orders yet.</p>
   }
 
   return (
@@ -19,8 +19,8 @@ export function RecentOrders({ orders }: { orders: Order[] }) {
         <div key={order.id} className='flex items-center justify-between gap-4'>
           <div className='space-y-1'>
             <p className='text-sm leading-none font-medium'>{order.username}</p>
-            <p className='text-muted-foreground text-xs'>{order.email}</p>
-            <p className='text-muted-foreground font-mono text-xs'>
+            <p className='text-xs text-muted-foreground'>{order.email}</p>
+            <p className='font-mono text-xs text-muted-foreground'>
               {order.id.slice(0, 8)}
             </p>
           </div>
@@ -28,10 +28,7 @@ export function RecentOrders({ orders }: { orders: Order[] }) {
             <div className='font-medium tabular-nums'>
               {rupiah.format(order.total)}
             </div>
-            <Badge
-              variant='outline'
-              className={orderStatusClass[order.status]}
-            >
+            <Badge variant='outline' className={orderStatusClass[order.status]}>
               {order.status}
             </Badge>
           </div>

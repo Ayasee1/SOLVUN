@@ -1,12 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { toast } from 'sonner'
-import { ConfigDrawer } from '@/components/config-drawer'
-import { Header } from '@/components/layout/header'
-import { Main } from '@/components/layout/main'
-import { ProfileDropdown } from '@/components/profile-dropdown'
-import { Search } from '@/components/search'
-import { ThemeSwitch } from '@/components/theme-switch'
+import { queryWithToast } from '@/lib/query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,8 +20,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ConfigDrawer } from '@/components/config-drawer'
+import { Header } from '@/components/layout/header'
+import { Main } from '@/components/layout/main'
+import { ProfileDropdown } from '@/components/profile-dropdown'
+import { Search } from '@/components/search'
+import { ThemeSwitch } from '@/components/theme-switch'
 import { fetchOrders } from './api'
-import { orderStatuses, type Order, type OrderStatus } from './data/schema'
+import { orderStatuses, type OrderStatus } from './data/schema'
 import { orderStatusClass, paymentMethodLabel } from './data/status'
 
 const rupiah = new Intl.NumberFormat('id-ID', {
@@ -47,24 +48,16 @@ function formatDate(value: string) {
 }
 
 export function Orders() {
-  const [orders, setOrders] = useState<Order[]>([])
   const [status, setStatus] = useState<OrderStatus | 'all'>('all')
-  const [loading, setLoading] = useState(true)
+  const ordersQuery = useQuery({
+    queryKey: ['orders', status],
+    queryFn: () => queryWithToast(() => fetchOrders(status)),
+    placeholderData: keepPreviousData,
+    retry: false,
+  })
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      setOrders(await fetchOrders(status))
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to load orders')
-    } finally {
-      setLoading(false)
-    }
-  }, [status])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+  const orders = ordersQuery.data ?? []
+  const loading = ordersQuery.isLoading
 
   return (
     <>
@@ -101,7 +94,10 @@ export function Orders() {
                 ))}
               </SelectContent>
             </Select>
-            <Button variant='outline' onClick={() => void load()}>
+            <Button
+              variant='outline'
+              onClick={() => void ordersQuery.refetch()}
+            >
               Refresh
             </Button>
           </div>
@@ -134,7 +130,7 @@ export function Orders() {
                 <TableRow>
                   <TableCell
                     colSpan={7}
-                    className='text-muted-foreground h-24 text-center'
+                    className='h-24 text-center text-muted-foreground'
                   >
                     No orders found.
                   </TableCell>
@@ -148,13 +144,13 @@ export function Orders() {
                       <div className='font-mono text-xs'>
                         {order.id.slice(0, 8)}
                       </div>
-                      <div className='text-muted-foreground text-xs'>
+                      <div className='text-xs text-muted-foreground'>
                         {formatDate(order.created_at)}
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className='font-medium'>{order.username}</div>
-                      <div className='text-muted-foreground text-xs'>
+                      <div className='text-xs text-muted-foreground'>
                         {order.email}
                       </div>
                     </TableCell>
@@ -174,7 +170,7 @@ export function Orders() {
                         {order.status}
                       </Badge>
                     </TableCell>
-                    <TableCell className='text-muted-foreground text-sm'>
+                    <TableCell className='text-sm text-muted-foreground'>
                       {paymentMethodLabel(order.payment)}
                     </TableCell>
                     <TableCell className='text-right'>

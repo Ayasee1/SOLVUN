@@ -1,11 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { toast } from 'sonner'
-import { ConfigDrawer } from '@/components/config-drawer'
-import { Header } from '@/components/layout/header'
-import { Main } from '@/components/layout/main'
-import { ProfileDropdown } from '@/components/profile-dropdown'
-import { Search } from '@/components/search'
-import { ThemeSwitch } from '@/components/theme-switch'
+import { useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { queryWithToast } from '@/lib/query'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -15,10 +10,15 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ConfigDrawer } from '@/components/config-drawer'
+import { Header } from '@/components/layout/header'
+import { Main } from '@/components/layout/main'
+import { ProfileDropdown } from '@/components/profile-dropdown'
+import { Search } from '@/components/search'
+import { ThemeSwitch } from '@/components/theme-switch'
 import { fetchOrders } from '@/features/orders/api'
-import { orderStatuses, type Order } from '@/features/orders/data/schema'
+import { orderStatuses } from '@/features/orders/data/schema'
 import { fetchProducts } from '@/features/products/api'
-import { type Product } from '@/features/products/data/schema'
 import { OrdersByStatusChart } from './components/overview'
 import { RecentOrders } from './components/recent-sales'
 
@@ -29,29 +29,20 @@ const rupiah = new Intl.NumberFormat('id-ID', {
 })
 
 export function Dashboard() {
-  const [orders, setOrders] = useState<Order[]>([])
-  const [products, setProducts] = useState<Product[]>([])
-  const [loading, setLoading] = useState(true)
+  const ordersQuery = useQuery({
+    queryKey: ['orders', 'all'],
+    queryFn: () => queryWithToast(() => fetchOrders('all')),
+    retry: false,
+  })
+  const productsQuery = useQuery({
+    queryKey: ['products'],
+    queryFn: () => queryWithToast(fetchProducts),
+    retry: false,
+  })
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [orderList, productList] = await Promise.all([
-        fetchOrders('all'),
-        fetchProducts(),
-      ])
-      setOrders(orderList)
-      setProducts(productList)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to load data')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+  const orders = ordersQuery.data ?? []
+  const products = productsQuery.data ?? []
+  const loading = ordersQuery.isLoading || productsQuery.isLoading
 
   const stats = useMemo(() => {
     const paid = orders.filter((order) => order.status === 'paid')
@@ -96,7 +87,13 @@ export function Dashboard() {
               Live numbers straight from the store database.
             </p>
           </div>
-          <Button variant='outline' onClick={() => void load()}>
+          <Button
+            variant='outline'
+            onClick={() => {
+              void ordersQuery.refetch()
+              void productsQuery.refetch()
+            }}
+          >
             Refresh
           </Button>
         </div>
@@ -125,7 +122,7 @@ export function Dashboard() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className='text-muted-foreground text-xs'>
+                  <p className='text-xs text-muted-foreground'>
                     from {stats.paidCount} paid order
                     {stats.paidCount === 1 ? '' : 's'}
                   </p>
@@ -140,7 +137,7 @@ export function Dashboard() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className='text-muted-foreground text-xs'>
+                  <p className='text-xs text-muted-foreground'>
                     {stats.pending} pending
                   </p>
                 </CardContent>
@@ -160,7 +157,7 @@ export function Dashboard() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className='text-muted-foreground text-xs'>
+                  <p className='text-xs text-muted-foreground'>
                     paid orders that could not be fulfilled
                   </p>
                 </CardContent>
@@ -174,7 +171,7 @@ export function Dashboard() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className='text-muted-foreground text-xs'>
+                  <p className='text-xs text-muted-foreground'>
                     {stats.lowStock} low stock · {stats.hidden} hidden
                   </p>
                 </CardContent>
