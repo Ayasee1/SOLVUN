@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,18 +22,18 @@ type Props = {
 }
 
 export function EditProductDialog({ product, onClose, onSaved }: Props) {
-  const [price, setPrice] = useState('')
-  const [stock, setStock] = useState('')
-  const [available, setAvailable] = useState(true)
+  // The parent remounts this dialog per product (key={product.id}), so the
+  // initial values always match the product being edited.
+  const [price, setPrice] = useState(() =>
+    product ? String(product.price) : ''
+  )
+  const [stock, setStock] = useState(() =>
+    product ? String(product.stock) : ''
+  )
+  const [available, setAvailable] = useState(
+    () => product?.is_available ?? true
+  )
   const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (product) {
-      setPrice(String(product.price))
-      setStock(String(product.stock))
-      setAvailable(product.is_available)
-    }
-  }, [product])
 
   async function save() {
     if (!product) return
@@ -102,7 +102,7 @@ export function EditProductDialog({ product, onClose, onSaved }: Props) {
           <div className='flex items-center justify-between rounded-md border p-3'>
             <div>
               <Label htmlFor='available'>Available in storefront</Label>
-              <p className='text-muted-foreground text-xs'>
+              <p className='text-xs text-muted-foreground'>
                 Hidden products stay in the database but are not sold.
               </p>
             </div>

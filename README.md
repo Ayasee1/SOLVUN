@@ -70,6 +70,33 @@ cd web && bun run build
 cd admin && bun run test
 ```
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request to `main`, and
+can be triggered manually from the Actions tab. A push to a branch cancels the
+previous run for that branch.
+
+| Job            | What it does                                                                 |
+| -------------- | ---------------------------------------------------------------------------- |
+| `backend`      | `gofmt -l`, `go vet`, `go test -race -count=1 ./...`, `go build ./...`        |
+| `storefront`   | `bun install --frozen-lockfile`, `bun run build`, uploads `web/dist`          |
+| `admin`        | `bun install --frozen-lockfile`, `bun run lint`, `format:check`, build, uploads `admin/dist` |
+| `admin-tests`  | installs Playwright Chromium, runs the Vitest browser suite                   |
+| `ci`           | aggregate gate: fails if any of the jobs above did not succeed                |
+
+Notes:
+
+- The frontend jobs use Bun `1.3.14` (pinned in `env.BUN_VERSION`) and cache
+  `~/.bun/install/cache` keyed on the matching `bun.lock`, so installs are fast
+  and reproducible.
+- `--frozen-lockfile` fails the build when `package.json` and the lockfile
+  disagree, which catches forgotten `bun install` runs.
+- The Go job uses the version in `go.mod` and enables the module cache.
+- Artifacts are kept for 7 days. They are build outputs only; nothing is
+  deployed by this workflow.
+- Keep the `ci` job as the single required status check in branch protection so
+  adding or reordering jobs does not break the rule.
+
 ## Order lifecycle
 
 1. `POST /orders` validates the cart, recomputes prices and shipping from the

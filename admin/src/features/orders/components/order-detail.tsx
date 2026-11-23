@@ -1,21 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ArrowLeft, Download } from 'lucide-react'
 import { toast } from 'sonner'
-import { ConfigDrawer } from '@/components/config-drawer'
-import { Header } from '@/components/layout/header'
-import { Main } from '@/components/layout/main'
-import { ProfileDropdown } from '@/components/profile-dropdown'
-import { Search } from '@/components/search'
-import { ThemeSwitch } from '@/components/theme-switch'
+import { queryWithToast } from '@/lib/query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -26,8 +17,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ConfigDrawer } from '@/components/config-drawer'
+import { Header } from '@/components/layout/header'
+import { Main } from '@/components/layout/main'
+import { ProfileDropdown } from '@/components/profile-dropdown'
+import { Search } from '@/components/search'
+import { ThemeSwitch } from '@/components/theme-switch'
 import { cancelOrder, fetchOrder } from '../api'
-import type { Order } from '../data/schema'
 import { orderStatusClass, paymentMethodLabel } from '../data/status'
 
 const rupiah = new Intl.NumberFormat('id-ID', {
@@ -48,32 +44,23 @@ function formatDate(value: string) {
 }
 
 export function OrderDetail({ orderId }: { orderId: string }) {
-  const [order, setOrder] = useState<Order | null>(null)
-  const [loading, setLoading] = useState(true)
   const [cancelling, setCancelling] = useState(false)
+  const orderQuery = useQuery({
+    queryKey: ['orders', orderId],
+    queryFn: () => queryWithToast(() => fetchOrder(orderId)),
+    retry: false,
+  })
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      setOrder(await fetchOrder(orderId))
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to load order')
-    } finally {
-      setLoading(false)
-    }
-  }, [orderId])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+  const order = orderQuery.data ?? null
+  const loading = orderQuery.isLoading
 
   async function onCancel() {
     if (!order) return
     setCancelling(true)
     try {
-      const updated = await cancelOrder(order.id)
-      setOrder(updated)
+      await cancelOrder(order.id)
       toast.success('Order cancelled and stock released')
+      void orderQuery.refetch()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Cancel failed')
     } finally {
@@ -103,7 +90,7 @@ export function OrderDetail({ orderId }: { orderId: string }) {
               {orderId}
             </h2>
             {order && (
-              <p className='text-muted-foreground text-sm'>
+              <p className='text-sm text-muted-foreground'>
                 placed {formatDate(order.created_at)}
               </p>
             )}
@@ -183,13 +170,15 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                   </Table>
                   <Separator />
                   <div className='space-y-1'>
-                    <div className='text-muted-foreground flex items-center justify-between text-sm'>
+                    <div className='flex items-center justify-between text-sm text-muted-foreground'>
                       <span>Subtotal</span>
                       <span className='tabular-nums'>
-                        {rupiah.format(order.total - (order.shipping_cost ?? 0))}
+                        {rupiah.format(
+                          order.total - (order.shipping_cost ?? 0)
+                        )}
                       </span>
                     </div>
-                    <div className='text-muted-foreground flex items-center justify-between text-sm'>
+                    <div className='flex items-center justify-between text-sm text-muted-foreground'>
                       <span>
                         Shipping
                         {order.courier
@@ -228,25 +217,35 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                       {order.payment.va_number && (
                         <>
                           <dt className='text-muted-foreground'>VA number</dt>
-                          <dd className='font-mono'>{order.payment.va_number}</dd>
+                          <dd className='font-mono'>
+                            {order.payment.va_number}
+                          </dd>
                         </>
                       )}
                       {order.payment.biller_code && (
                         <>
                           <dt className='text-muted-foreground'>Biller code</dt>
-                          <dd className='font-mono'>{order.payment.biller_code}</dd>
+                          <dd className='font-mono'>
+                            {order.payment.biller_code}
+                          </dd>
                         </>
                       )}
                       {order.payment.bill_key && (
                         <>
                           <dt className='text-muted-foreground'>VA number</dt>
-                          <dd className='font-mono'>{order.payment.bill_key}</dd>
+                          <dd className='font-mono'>
+                            {order.payment.bill_key}
+                          </dd>
                         </>
                       )}
                       {order.payment.payment_code && (
                         <>
-                          <dt className='text-muted-foreground'>Payment code</dt>
-                          <dd className='font-mono'>{order.payment.payment_code}</dd>
+                          <dt className='text-muted-foreground'>
+                            Payment code
+                          </dt>
+                          <dd className='font-mono'>
+                            {order.payment.payment_code}
+                          </dd>
                         </>
                       )}
                       {order.payment.masked_card && (
@@ -323,14 +322,18 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                     <>
                       <div className='flex items-center justify-between'>
                         <span className='text-muted-foreground'>Waybill</span>
-                        <span className='font-mono'>{order.shipment.waybill_id || '-'}</span>
+                        <span className='font-mono'>
+                          {order.shipment.waybill_id || '-'}
+                        </span>
                       </div>
                       <div className='flex items-center justify-between'>
                         <span className='text-muted-foreground'>Status</span>
-                        <Badge variant='outline'>{order.shipment.status || '-'}</Badge>
+                        <Badge variant='outline'>
+                          {order.shipment.status || '-'}
+                        </Badge>
                       </div>
                       {order.shipment.provider_id && (
-                        <div className='text-muted-foreground pt-1 font-mono text-xs'>
+                        <div className='pt-1 font-mono text-xs text-muted-foreground'>
                           {order.shipment.provider_id}
                         </div>
                       )}
@@ -339,7 +342,9 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                           <ol className='mt-3 space-y-2 border-s ps-3'>
                             {order.shipment.history.map((event, index) => (
                               <li key={index} className='text-xs'>
-                                <div className='font-medium'>{event.status}</div>
+                                <div className='font-medium'>
+                                  {event.status}
+                                </div>
                                 {event.note && (
                                   <div className='text-muted-foreground'>
                                     {event.note}
@@ -377,7 +382,7 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                     href={`https://www.google.com/maps?q=${order.address.latitude},${order.address.longitude}`}
                     target='_blank'
                     rel='noreferrer'
-                    className='text-muted-foreground text-xs underline underline-offset-4'
+                    className='text-xs text-muted-foreground underline underline-offset-4'
                   >
                     {order.address.latitude}, {order.address.longitude}
                   </a>
