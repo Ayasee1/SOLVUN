@@ -16,7 +16,7 @@ import { Main } from '@/components/layout/main'
 import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
-import { fetchOrders } from '@/features/orders/api'
+import { fetchOrderStats, fetchOrders } from '@/features/orders/api'
 import { orderStatuses } from '@/features/orders/data/schema'
 import { fetchProducts } from '@/features/products/api'
 import { OrdersByStatusChart } from './components/overview'
@@ -29,9 +29,14 @@ const rupiah = new Intl.NumberFormat('id-ID', {
 })
 
 export function Dashboard() {
-  const ordersQuery = useQuery({
-    queryKey: ['orders', 'all'],
-    queryFn: () => queryWithToast(() => fetchOrders('all')),
+  const statsQuery = useQuery({
+    queryKey: ['order-stats'],
+    queryFn: () => queryWithToast(fetchOrderStats),
+    retry: false,
+  })
+  const recentQuery = useQuery({
+    queryKey: ['orders', 'recent'],
+    queryFn: () => queryWithToast(() => fetchOrders('all', 5, 0)),
     retry: false,
   })
   const productsQuery = useQuery({
@@ -40,34 +45,34 @@ export function Dashboard() {
     retry: false,
   })
 
-  const orders = ordersQuery.data ?? []
+  const serverStats = statsQuery.data
   const products = productsQuery.data ?? []
-  const loading = ordersQuery.isLoading || productsQuery.isLoading
+  const recentOrders = recentQuery.data?.items ?? []
+  const loading = statsQuery.isLoading || productsQuery.isLoading
 
   const stats = useMemo(() => {
-    const paid = orders.filter((order) => order.status === 'paid')
+    const byStatus = serverStats?.by_status
     return {
-      revenue: paid.reduce((sum, order) => sum + order.total, 0),
-      paidCount: paid.length,
-      orders: orders.length,
-      pending: orders.filter((order) => order.status === 'pending').length,
-      needsRefund: orders.filter((order) => order.status === 'needs_refund')
-        .length,
+      revenue: serverStats?.revenue ?? 0,
+      paidCount: byStatus?.paid ?? 0,
+      orders: serverStats?.orders_total ?? 0,
+      pending: byStatus?.pending ?? 0,
+      needsRefund: byStatus?.needs_refund ?? 0,
       products: products.length,
       hidden: products.filter((product) => !product.is_available).length,
       lowStock: products.filter(
         (product) => product.is_available && product.stock <= 5
       ).length,
     }
-  }, [orders, products])
+  }, [serverStats, products])
 
   const statusData = useMemo(
     () =>
       orderStatuses.map((status) => ({
         status,
-        count: orders.filter((order) => order.status === status).length,
+        count: serverStats?.by_status?.[status] ?? 0,
       })),
-    [orders]
+    [serverStats]
   )
 
   return (
@@ -90,7 +95,8 @@ export function Dashboard() {
           <Button
             variant='outline'
             onClick={() => {
-              void ordersQuery.refetch()
+              void statsQuery.refetch()
+              void recentQuery.refetch()
               void productsQuery.refetch()
             }}
           >
@@ -199,7 +205,7 @@ export function Dashboard() {
               <CardDescription>The latest orders placed.</CardDescription>
             </CardHeader>
             <CardContent>
-              <RecentOrders orders={orders.slice(0, 5)} />
+              <RecentOrders orders={recentOrders} />
             </CardContent>
           </Card>
         </div>

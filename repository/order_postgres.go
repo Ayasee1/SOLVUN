@@ -68,28 +68,70 @@ func (r *PostgresOrderRepository) Save(order model.UserOrder) error {
 	return err
 }
 
-func (r *PostgresOrderRepository) GetAll(status model.OrderStatus) ([]model.UserOrder, error) {
+func (r *PostgresOrderRepository) GetAll(status model.OrderStatus, limit, offset int) ([]model.UserOrder, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
 
+	limit, offset = PageBounds(limit, offset)
+
+	var total int
+	if err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM orders WHERE ($1 = '' OR status = $1)`,
+		string(status)).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
 	rows, err := r.pool.Query(ctx,
-		`SELECT `+orderColumns+` FROM orders WHERE ($1 = '' OR status = $1) ORDER BY created_at DESC`,
-		string(status))
+		`SELECT `+orderColumns+` FROM orders WHERE ($1 = '' OR status = $1)
+		 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+		string(status), limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
-	orders := make([]model.UserOrder, 0)
+	orders := make([]model.UserOrder, 0, limit)
 	for rows.Next() {
 		order, err := scanOrder(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		orders = append(orders, *order)
 	}
 
-	return orders, rows.Err()
+	return orders, total, rows.Err()
+}
+
+// Stats aggregates every order for the dashboard without loading the rows.
+func (r *PostgresOrderRepository) Stats() (OrderStats, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT status, count(*), COALESCE(sum(total), 0)::bigint FROM orders GROUP BY status`)
+	if err != nil {
+		return OrderStats{}, err
+	}
+	defer rows.Close()
+
+	stats := OrderStats{ByStatus: make(map[model.OrderStatus]int)}
+	for rows.Next() {
+		var (
+			status  string
+			count   int
+			revenue int
+		)
+		if err := rows.Scan(&status, &count, &revenue); err != nil {
+			return OrderStats{}, err
+		}
+		stats.Total += count
+		stats.ByStatus[model.OrderStatus(status)] = count
+		if model.OrderStatus(status) == model.OrderStatusPaid {
+			stats.Revenue = revenue
+		}
+	}
+
+	return stats, rows.Err()
 }
 
 // GetStalePending returns pending orders created before the cutoff. The sweeper

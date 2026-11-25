@@ -149,6 +149,7 @@ func buildAppWithShipping(provider shipping.Provider) (*fiber.App, *fakeGateway,
 	app.Get("/orders/:id/invoice.pdf", orderHandler.DownloadInvoice)
 	app.Post("/orders/:id/cancel", orderHandler.CancelOrder)
 	app.Post("/shipping/notification", orderHandler.ShippingNotification)
+	app.Get("/stats", orderHandler.GetStats)
 	app.Get("/order/:id", orderHandler.OrderPageView)
 	app.Get("/track", orderHandler.TrackPageView)
 	app.Post("/track", orderHandler.TrackPageView)
@@ -376,7 +377,14 @@ func TestGetOrdersFilterByStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fetch := func(t *testing.T, url string) []model.UserOrder {
+	type page struct {
+		Items  []model.UserOrder `json:"items"`
+		Total  int               `json:"total"`
+		Limit  int               `json:"limit"`
+		Offset int               `json:"offset"`
+	}
+
+	fetch := func(t *testing.T, url string) page {
 		t.Helper()
 		req, _ := http.NewRequest(http.MethodGet, url, nil)
 		resp, err := app.Test(req)
@@ -386,35 +394,86 @@ func TestGetOrdersFilterByStatus(t *testing.T) {
 		if resp.StatusCode != fiber.StatusOK {
 			t.Fatalf("GET %s status = %d, want 200", url, resp.StatusCode)
 		}
-		var orders []model.UserOrder
-		if err := json.NewDecoder(resp.Body).Decode(&orders); err != nil {
+		var got page
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
-		return orders
+		return got
 	}
 
-	if got := fetch(t, "/orders"); len(got) != 2 {
-		t.Errorf("GET /orders returned %d orders, want 2", len(got))
+	all := fetch(t, "/orders")
+	if all.Total != 2 || len(all.Items) != 2 || all.Limit != 25 || all.Offset != 0 {
+		t.Errorf("GET /orders = %+v, want 2 items, total 2, limit 25", all)
 	}
 
 	pending := fetch(t, "/orders?status=pending")
-	if len(pending) != 1 || pending[0].Status != model.OrderStatusPending {
+	if pending.Total != 1 || len(pending.Items) != 1 || pending.Items[0].Status != model.OrderStatusPending {
 		t.Errorf("pending filter returned %+v, want 1 pending order", pending)
 	}
 
 	cancelled := fetch(t, "/orders?status=cancelled")
-	if len(cancelled) != 1 || cancelled[0].ID != first.ID {
+	if cancelled.Total != 1 || len(cancelled.Items) != 1 || cancelled.Items[0].ID != first.ID {
 		t.Errorf("cancelled filter returned %+v, want the cancelled order", cancelled)
 	}
 
-	// unknown status is rejected
-	req, _ := http.NewRequest(http.MethodGet, "/orders?status=bogus", nil)
+	// Newest first: the second order was created last.
+	second := fetch(t, "/orders?limit=1&offset=0")
+	if second.Total != 2 || len(second.Items) != 1 || second.Items[0].ID == first.ID {
+		t.Errorf("first page = %+v, want the newest order", second)
+	}
+	last := fetch(t, "/orders?limit=1&offset=1")
+	if last.Total != 2 || len(last.Items) != 1 || last.Items[0].ID != first.ID {
+		t.Errorf("second page = %+v, want the cancelled order", last)
+	}
+
+	// Out-of-range pages are empty but keep the total.
+	beyond := fetch(t, "/orders?limit=1&offset=99")
+	if beyond.Total != 2 || len(beyond.Items) != 0 {
+		t.Errorf("beyond the last page = %+v, want 0 items and total 2", beyond)
+	}
+
+	// Bad bounds are clamped, not rejected.
+	clamped := fetch(t, "/orders?limit=999&offset=-5")
+	if clamped.Limit != 100 || clamped.Offset != 0 {
+		t.Errorf("clamped = limit %d offset %d, want 100/0", clamped.Limit, clamped.Offset)
+	}
+}
+
+func TestGetOrderStats(t *testing.T) {
+	app, _ := setupApp()
+
+	_, first := postOrder(t, app, model.Item{ID: 1, Qty: 1})
+	postOrder(t, app, model.Item{ID: 1, Qty: 1})
+	cancelReq, _ := http.NewRequest(http.MethodPost, "/orders/"+first.ID.String()+"/cancel", nil)
+	if _, err := app.Test(cancelReq); err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, "/stats", nil)
 	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != fiber.StatusBadRequest {
-		t.Errorf("invalid status returned %d, want 400", resp.StatusCode)
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var stats struct {
+		OrdersTotal int            `json:"orders_total"`
+		Revenue     int            `json:"revenue"`
+		ByStatus    map[string]int `json:"by_status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats.OrdersTotal != 2 {
+		t.Errorf("orders_total = %d, want 2", stats.OrdersTotal)
+	}
+	if stats.ByStatus["pending"] != 1 || stats.ByStatus["cancelled"] != 1 {
+		t.Errorf("by_status = %+v", stats.ByStatus)
+	}
+	if stats.Revenue != 0 {
+		t.Errorf("revenue = %d, want 0", stats.Revenue)
 	}
 }
 
