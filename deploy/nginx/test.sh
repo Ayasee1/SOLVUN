@@ -111,7 +111,7 @@ server {
     listen 127.0.0.1:3001;
 
     location / {
-        add_header X-Mock-Path $request_uri always;
+        add_header X-Mock-Path $uri always;
         add_header X-Mock-Method $request_method always;
         return 200 "upstream";
     }
@@ -207,6 +207,16 @@ info "shop(${HOSTS[0]})"
 check_header X-Mock-Path /orders/123 \
     "/api/orders/123 strips the /api prefix" \
     "${SHOP[@]}" "$BASE/api/orders/123"
+
+check_header X-Mock-Path /shipping/notification \
+    "the shipping webhook reaches the API with its token" \
+    "${SHOP[@]}" "$BASE/api/shipping/notification?token=secret-token"
+
+if docker exec "$CONTAINER" grep -q "secret-token" /var/log/nginx/solvun-shop.access.log 2>/dev/null; then
+    no "the webhook token stays out of the access log" "token found in the access log"
+else
+    ok "the webhook token stays out of the access log"
+fi
 
 check_status 404 \
     "/api/admin/orders is not exposed on the storefront" \
