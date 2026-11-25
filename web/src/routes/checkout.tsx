@@ -31,6 +31,7 @@ import {
   type LatLon,
 } from '@/components/map-picker'
 import { useCart } from '@/features/cart/cart-store'
+import { applyPinnedPlace, type AddressField, type AutoFilledAddress, type PinnedPlace } from '@/lib/address'
 import { api, ApiError, fetchShippingRates, type ShippingRate } from '@/lib/api'
 import { formatRupiah } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -86,6 +87,13 @@ const emptyForm: Form = {
   zip: '',
 }
 
+const ADDRESS_LABELS: Record<AddressField, string> = {
+  street: 'the street',
+  city: 'the city',
+  state: 'the province',
+  zip: 'the postal code',
+}
+
 function Checkout() {
   const { items, subtotal, clear } = useCart()
 
@@ -102,8 +110,15 @@ function Checkout() {
   const [locating, setLocating] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [payment, setPayment] = useState<CreatedOrder | null>(null)
-  const [autoFilled, setAutoFilled] = useState<Record<string, string>>({})
+  const [autoFilled, setAutoFilled] = useState<AutoFilledAddress>(
+    draft.autoFilled ?? {}
+  )
+  const [filling, setFilling] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
+  const latestForm = useRef(form)
+  latestForm.current = form
+  const latestAutoFilled = useRef(autoFilled)
+  latestAutoFilled.current = autoFilled
 
   const selectedRate = useMemo(
     () => rates.find((rate) => key(rate) === selected),
@@ -114,8 +129,8 @@ function Checkout() {
   const itemCount = items.reduce((sum, item) => sum + item.qty, 0)
 
   useEffect(() => {
-    writeDraft({ form, pin })
-  }, [form, pin])
+    writeDraft({ form, pin, autoFilled })
+  }, [form, pin, autoFilled])
 
   function set<K extends keyof Form>(field: K, value: Form[K]) {
     setForm((current) => ({ ...current, [field]: value }))
@@ -173,33 +188,28 @@ function Checkout() {
     }
   }, [form.zip, pin?.lat, pin?.lon, items])
 
-  function applyPlace(place: {
-    street?: string
-    city?: string
-    state?: string
-    postalCode?: string
-  }) {
-    const filled: Record<string, string> = {}
-    const next = { ...form }
+  // applyPlace merges a reverse-geocoded pin into the form. The explicit
+  // "Fill address from pin" action always replaces resolved fields, and reports
+  // the ones the pin could not resolve.
+  function applyPlace(place: PinnedPlace): AddressField[] {
+    const current = latestForm.current
+    const { values, autoFilled: nextAuto, missing } = applyPinnedPlace(
+      { street: current.street, city: current.city, state: current.state, zip: current.zip },
+      latestAutoFilled.current,
+      place
+    )
 
-    const setIfAuto = (field: keyof Form, value?: string) => {
-      const candidate = (value ?? '').trim()
-      if (!candidate) return
-      const current = String(form[field])
-      const previousAuto = autoFilled[field]
-      if (!current || current === previousAuto) {
-        next[field] = candidate as never
-        filled[field] = candidate
+    setForm((current) => ({ ...current, ...values }))
+    setAutoFilled(nextAuto)
+    setErrors((current) => {
+      const next = { ...current }
+      for (const field of Object.keys(values) as AddressField[]) {
+        next[field] = undefined
       }
-    }
+      return next
+    })
 
-    setIfAuto('street', place.street)
-    setIfAuto('city', place.city)
-    setIfAuto('state', place.state)
-    setIfAuto('zip', (place.postalCode ?? '').replace(/\D/g, '').slice(0, 5))
-
-    setForm(next)
-    setAutoFilled((previous) => ({ ...previous, ...filled }))
+    return missing
   }
 
   async function locateTypedAddress() {
@@ -234,14 +244,28 @@ function Checkout() {
   }
 
   async function fillAddressFromPin() {
-    if (!pin) return
-    const place = await reverseGeocode(pin)
-    if (!place) {
-      toast.error('Could not resolve an address for that pin')
-      return
+    if (!pin || filling) return
+    setFilling(true)
+    try {
+      const place = await reverseGeocode(pin)
+      if (!place) {
+        toast.error('Could not resolve an address for that pin')
+        return
+      }
+
+      const missing = applyPlace(place)
+      if (missing.length > 0) {
+        const labels = missing.map((field) => ADDRESS_LABELS[field]).join(', ')
+        toast.info(
+          `The pin resolved, but ${labels} could not be found. Please complete it.`
+        )
+        return
+      }
+
+      toast.success('Address filled from the pin')
+    } finally {
+      setFilling(false)
     }
-    applyPlace(place)
-    toast.success('Address filled from the pin')
   }
 
   function validate(): Errors {
@@ -636,8 +660,12 @@ function Checkout() {
                           type='button'
                           variant='ghost'
                           size='sm'
+                          disabled={filling}
                           onClick={() => void fillAddressFromPin()}
                         >
+                          {filling ? (
+                            <Loader2 className='size-4 animate-spin' />
+                          ) : null}
                           Fill address from pin
                         </Button>
                       )}
@@ -1114,7 +1142,11 @@ function loadSnapScript(production: boolean, clientKey: string) {
   })
 }
 
-type Draft = { form?: Partial<Form>; pin?: LatLon }
+type Draft = {
+  form?: Partial<Form>
+  pin?: LatLon
+  autoFilled?: AutoFilledAddress
+}
 
 function readDraft(): Draft {
   try {
