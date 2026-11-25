@@ -77,6 +77,14 @@ func TestOpsAlertDefaults(t *testing.T) {
 	}
 }
 
+func TestBiteshipWebhookToken(t *testing.T) {
+	t.Setenv("BITESHIP_WEBHOOK_TOKEN", "  s3cret  ")
+
+	if cfg := Load(); cfg.BiteshipWebhookToken != "s3cret" {
+		t.Fatalf("BiteshipWebhookToken = %q", cfg.BiteshipWebhookToken)
+	}
+}
+
 func TestShipmentRetrySettings(t *testing.T) {
 	t.Setenv("SHIPMENT_RETRY_ENABLED", "false")
 	t.Setenv("SHIPMENT_RETRY_MAX_ATTEMPTS", "3")

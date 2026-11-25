@@ -637,6 +637,54 @@ func TestFlowRetryShipmentForIsIdempotent(t *testing.T) {
 	}
 }
 
+// Case 10: the shipping webhook requires the shared secret when configured.
+func TestFlowShippingWebhookRequiresToken(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+	flow.orderHandler.SetShippingWebhookToken("s3cret")
+
+	body := map[string]string{"order_id": "bite-123"}
+
+	missing := postJSON(t, flow.app, "/shipping/notification", body)
+	if missing.StatusCode != fiber.StatusUnauthorized {
+		t.Errorf("missing token status = %d, want 401", missing.StatusCode)
+	}
+
+	wrong := postJSON(t, flow.app, "/shipping/notification?token=nope", body)
+	if wrong.StatusCode != fiber.StatusUnauthorized {
+		t.Errorf("wrong token status = %d, want 401", wrong.StatusCode)
+	}
+
+	// A valid token clears the gate; the order simply does not exist.
+	valid := postJSON(t, flow.app, "/shipping/notification?token=s3cret", body)
+	if valid.StatusCode == fiber.StatusUnauthorized {
+		t.Error("query token was rejected")
+	}
+
+	header := postJSONWithHeader(t, flow.app, "/shipping/notification", body, "X-Webhook-Token", "s3cret")
+	if header.StatusCode == fiber.StatusUnauthorized {
+		t.Error("header token was rejected")
+	}
+}
+
+func postJSONWithHeader(t *testing.T, app *fiber.App, path string, body any, name, value string) *http.Response {
+	t.Helper()
+
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(name, value)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 func stockOf(t *testing.T, app *fiber.App, productID int) int {
 	t.Helper()
 

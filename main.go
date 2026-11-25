@@ -131,6 +131,10 @@ func main() {
 	orderHandler.SetStoreOrigin(cfg.StoreOriginLat, cfg.StoreOriginLon, cfg.StoreOriginAddress)
 	// Enables Midtrans signature verification on the payment webhook.
 	orderHandler.SetPaymentServerKey(cfg.MidtransServerKey)
+	orderHandler.SetShippingWebhookToken(cfg.BiteshipWebhookToken)
+	if cfg.ShippingProvider == "biteship" && cfg.BiteshipWebhookToken == "" {
+		log.Println("warning: BITESHIP_WEBHOOK_TOKEN is empty; the shipping webhook accepts any caller")
+	}
 	shippingHandler := handler.NewShippingHandler(shippingProvider, productRepo)
 	storeConfigHandler := handler.NewStoreConfigHandler(cfg.MidtransClientKey, cfg.MidtransEnv)
 
