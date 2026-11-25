@@ -73,7 +73,7 @@ func (h *OrderHandler) OrderPageView(c *fiber.Ctx) error {
 	// Webhooks cannot reach localhost/tunnels that changed. Reconcile pending
 	// orders with Midtrans on page load so the tracking page still catches up.
 	if order.Status == model.OrderStatusPending {
-		h.reconcilePendingOrder(order)
+		h.ReconcilePending(*order)
 		if latest, findErr := h.orderRepo.FindByID(id); findErr == nil {
 			order = latest
 		}

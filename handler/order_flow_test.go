@@ -27,18 +27,20 @@ import (
 // faked, which is what the handler sees when it talks to Midtrans/Biteship.
 
 type flowApp struct {
-	app      *fiber.App
-	products repository.ProductRepository
-	orders   repository.OrderRepository
-	gateway  *countingGateway
-	mailer   *fakeMailer
-	shipping *fakeShippingProvider
+	app          *fiber.App
+	products     repository.ProductRepository
+	orders       repository.OrderRepository
+	gateway      *countingGateway
+	mailer       *fakeMailer
+	shipping     *fakeShippingProvider
+	orderHandler *handler.OrderHandler
 }
 
 type countingGateway struct {
 	mu          sync.Mutex
 	statusCalls int
 	status      *payment.StatusResult
+	statusErr   error
 }
 
 func (g *countingGateway) Charge(model.UserOrder) (*payment.ChargeResult, error) {
@@ -50,6 +52,9 @@ func (g *countingGateway) CheckStatus(string) (*payment.StatusResult, error) {
 	g.statusCalls++
 	g.mu.Unlock()
 
+	if g.statusErr != nil {
+		return nil, g.statusErr
+	}
 	if g.status == nil {
 		return &payment.StatusResult{TransactionStatus: "pending"}, nil
 	}
@@ -92,12 +97,13 @@ func newFlowApp(t *testing.T, products repository.ProductRepository, orders repo
 	app.Post("/shipping/notification", orderHandler.ShippingNotification)
 
 	return &flowApp{
-		app:      app,
-		products: products,
-		orders:   orders,
-		gateway:  gateway,
-		mailer:   mailer,
-		shipping: provider,
+		app:          app,
+		products:     products,
+		orders:       orders,
+		gateway:      gateway,
+		mailer:       mailer,
+		shipping:     provider,
+		orderHandler: orderHandler,
 	}
 }
 
@@ -505,6 +511,81 @@ func TestFlowAdminRetryCreatesMissingShipment(t *testing.T) {
 	}
 	if got := len(flow.shipping.shipmentReqs); got != 2 {
 		t.Fatalf("provider calls = %d, want 2 (one failed, one retry)", got)
+	}
+}
+
+// Case 8: the sweeper asks Midtrans before expiring. A settlement that arrived
+// without a webhook must be applied, not tossed away.
+func TestFlowReconcilePendingAppliesSettlement(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+
+	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 2}))
+	flow.gateway.status = settlement("2000.00")
+
+	stored, err := flow.orders.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+
+	settled, verified := flow.orderHandler.ReconcilePending(*stored)
+	if !settled || !verified {
+		t.Fatalf("settled=%v verified=%v, want true/true", settled, verified)
+	}
+
+	after, err := flow.orders.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+	if after.Status != model.OrderStatusPaid {
+		t.Fatalf("status = %q, want paid", after.Status)
+	}
+	if after.Payment == nil {
+		t.Fatal("payment info was not recorded")
+	}
+	if stock := stockOf(t, flow.app, 1); stock != 8 {
+		t.Errorf("stock = %d, want 8 (already reserved at checkout)", stock)
+	}
+}
+
+func TestFlowReconcilePendingReportsProviderFailure(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+
+	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 2}))
+	flow.gateway.statusErr = errors.New("midtrans is down")
+
+	stored, err := flow.orders.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+
+	settled, verified := flow.orderHandler.ReconcilePending(*stored)
+	if settled || verified {
+		t.Fatalf("settled=%v verified=%v, want false/false", settled, verified)
+	}
+
+	after, err := flow.orders.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+	if after.Status != model.OrderStatusPending {
+		t.Fatalf("status = %q, want pending", after.Status)
+	}
+}
+
+func TestFlowReconcilePendingKeepsOpenTransaction(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+
+	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 1}))
+	flow.gateway.status = &payment.StatusResult{TransactionStatus: "pending"}
+
+	stored, err := flow.orders.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+
+	settled, verified := flow.orderHandler.ReconcilePending(*stored)
+	if settled || !verified {
+		t.Fatalf("settled=%v verified=%v, want false/true (still payable)", settled, verified)
 	}
 }
 
