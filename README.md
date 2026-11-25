@@ -121,8 +121,13 @@ previous run for that branch.
 - The Go job uses the version in `go.mod` and enables the module cache.
 - Artifacts are kept for 7 days. They are build outputs only; nothing is
   deployed by this workflow.
-- Keep the `ci` job as the single required status check in branch protection, so
-  adding or reordering jobs does not break the rule.
+- `main` is protected by a repository ruleset (`main: require CI and pull
+  requests`): changes must arrive through a pull request and the aggregate `CI`
+  check must pass. Only the gate is required, so adding or reordering jobs does
+  not break the rule.
+- The ruleset has no bypass actors, so even the owner cannot push to `main`
+  directly. If Actions is unavailable, disable the ruleset under
+  **Settings → Rules**, merge, then re-enable it.
 
 ## Order lifecycle
 
