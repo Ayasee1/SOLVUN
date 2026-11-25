@@ -21,7 +21,7 @@ import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { fetchProducts, updateProduct } from './api'
-import { EditProductDialog } from './components/edit-product-dialog'
+import { ProductFormDialog } from './components/product-form-dialog'
 import type { Product } from './data/schema'
 
 const rupiah = new Intl.NumberFormat('id-ID', {
@@ -44,6 +44,7 @@ function formatDate(value: string) {
 export function Products() {
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState<Product | null>(null)
+  const [formOpen, setFormOpen] = useState(false)
   const [togglingId, setTogglingId] = useState<number | null>(null)
   const queryClient = useQueryClient()
   const productsQuery = useQuery({
@@ -96,9 +97,8 @@ export function Products() {
           <div>
             <h2 className='text-2xl font-bold tracking-tight'>Products</h2>
             <p className='text-muted-foreground'>
-              Manage price, stock and availability. Product content (name,
-              description, images) lives in{' '}
-              <code className='text-xs'>catalog/*.json</code>.
+              Everything is stored in the database: content, price, stock and
+              availability.
             </p>
           </div>
 
@@ -114,6 +114,14 @@ export function Products() {
               onClick={() => void productsQuery.refetch()}
             >
               Refresh
+            </Button>
+            <Button
+              onClick={() => {
+                setEditing(null)
+                setFormOpen(true)
+              }}
+            >
+              Add product
             </Button>
           </div>
         </div>
@@ -197,7 +205,13 @@ export function Products() {
                         >
                           {product.is_available ? 'Hide' : 'Show'}
                         </Button>
-                        <Button size='sm' onClick={() => setEditing(product)}>
+                        <Button
+                          size='sm'
+                          onClick={() => {
+                            setEditing(product)
+                            setFormOpen(true)
+                          }}
+                        >
                           Edit
                         </Button>
                       </div>
@@ -209,12 +223,14 @@ export function Products() {
         </div>
       </Main>
 
-      <EditProductDialog
-        key={editing?.id ?? 'closed'}
-        product={editing}
-        onClose={() => setEditing(null)}
-        onSaved={() => void productsQuery.refetch()}
-      />
+      {formOpen && (
+        <ProductFormDialog
+          key={editing?.id ?? 'new'}
+          product={editing}
+          onClose={() => setFormOpen(false)}
+          onSaved={() => void productsQuery.refetch()}
+        />
+      )}
     </>
   )
 }

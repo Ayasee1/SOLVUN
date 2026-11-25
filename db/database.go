@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -75,6 +76,13 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipment_attempts INT NOT NULL DEFAU
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipment_last_attempt_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS orders_status_idx ON orders (status);
+
+-- products created from the dashboard get their id from this sequence; the
+-- catalog seed still uses explicit ids and syncs the sequence afterwards.
+CREATE SEQUENCE IF NOT EXISTS products_id_seq;
+ALTER TABLE products ALTER COLUMN id SET DEFAULT nextval('products_id_seq');
+-- keep the sequence ahead of ids inserted explicitly (catalog seed or old rows)
+SELECT setval('products_id_seq', (SELECT COALESCE(MAX(id), 1) FROM products));
 `
 
 // Migrate creates the tables if they do not exist yet.
@@ -90,27 +98,42 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 // availability stay owned by the database (orders, sweeper, admin) so a deploy
 // never overwrites runtime state.
 func Seed(ctx context.Context, pool *pgxpool.Pool, catalogs []model.Catalog) error {
-	for _, catalog := range catalogs {
-		for _, product := range catalog.Items {
-			images, err := json.Marshal(product.Images)
-			if err != nil {
-				return fmt.Errorf("marshal images for product %d: %w", product.ID, err)
-			}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM products`).Scan(&count); err != nil {
+		return fmt.Errorf("count products: %w", err)
+	}
 
-			_, err = pool.Exec(ctx, `
-				INSERT INTO products (id, name, description, images, price, stock, is_available, weight_gram)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-				ON CONFLICT (id) DO UPDATE SET
-					name = EXCLUDED.name,
-					description = EXCLUDED.description,
-					images = EXCLUDED.images,
-					weight_gram = EXCLUDED.weight_gram`,
-				product.ID, product.Name, product.Description, images,
-				product.Price, product.Stock, product.IsAvailable, product.WeightGram)
-			if err != nil {
-				return fmt.Errorf("seed product %d: %w", product.ID, err)
+	// The database owns the catalog once it has rows: seeding again would undo
+	// edits and resurrect deleted products made from the dashboard.
+	if count == 0 {
+		seeded := 0
+		for _, catalog := range catalogs {
+			for _, product := range catalog.Items {
+				images, err := json.Marshal(product.Images)
+				if err != nil {
+					return fmt.Errorf("marshal images for product %d: %w", product.ID, err)
+				}
+
+				_, err = pool.Exec(ctx, `
+					INSERT INTO products (id, name, description, images, price, stock, is_available, weight_gram)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+					product.ID, product.Name, product.Description, images,
+					product.Price, product.Stock, product.IsAvailable, product.WeightGram)
+				if err != nil {
+					return fmt.Errorf("seed product %d: %w", product.ID, err)
+				}
+				seeded++
 			}
 		}
+		log.Printf("seeded %d catalog rows into an empty products table", seeded)
+	} else {
+		log.Printf("products table already has %d rows, skipping the catalog seed", count)
 	}
+
+	// Keep the sequence ahead of the highest explicit (catalog) id.
+	if _, err := pool.Exec(ctx, `SELECT setval('products_id_seq', (SELECT COALESCE(MAX(id), 1) FROM products))`); err != nil {
+		return fmt.Errorf("sync product id sequence: %w", err)
+	}
+
 	return nil
 }

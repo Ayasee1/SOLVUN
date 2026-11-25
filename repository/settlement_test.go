@@ -167,6 +167,9 @@ func postgresSettleRepo(t *testing.T) (*pgxpool.Pool, *PostgresOrderRepository) 
 		VALUES (1, 'A', 1000, 10, 100), (2, 'B', 500, 0, 100)`); err != nil {
 		t.Fatalf("seed products: %v", err)
 	}
+	if _, err := pool.Exec(context.Background(), `SELECT setval('products_id_seq', 2)`); err != nil {
+		t.Fatalf("sync product sequence: %v", err)
+	}
 
 	return pool, NewPostgresOrderRepository(pool)
 }

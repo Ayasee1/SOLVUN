@@ -123,6 +123,8 @@ PY
 
 printf '<!doctype html><title>storefront-fixture</title>' > "$TMP/web/index.html"
 printf '<!doctype html><title>admin-fixture</title>' > "$TMP/admin/index.html"
+mkdir -p "$TMP/media/products"
+printf 'png' > "$TMP/media/products/test.png"
 printf 'console.log("fixture")' > "$TMP/web/assets/app-abc123.js"
 printf 'console.log("fixture")' > "$TMP/admin/assets/app-abc123.js"
 
@@ -134,6 +136,7 @@ docker run -d --name "$CONTAINER" \
     -v "$NGINX_DIR/snippets:/etc/nginx/snippets:ro" \
     -v "$TMP/web:/var/www/solvun/web:ro" \
     -v "$TMP/admin:/var/www/solvun/admin:ro" \
+    -v "$TMP/media:/var/www/solvun/media:ro" \
     "$IMAGE" >/dev/null
 
 READY=0
@@ -242,6 +245,14 @@ check_header Cache-Control "max-age=31536000" \
     "hashed assets are cached for a year" \
     "${SHOP[@]}" "$BASE/assets/app-abc123.js"
 
+check_status 200 \
+    "uploaded product images are served" \
+    "${SHOP[@]}" "$BASE/media/products/test.png"
+
+check_header Cache-Control "max-age=2592000" \
+    "uploaded product images are cached for 30 days" \
+    "${SHOP[@]}" "$BASE/media/products/test.png"
+
 check_status 404 \
     "a missing asset is a 404, not the SPA" \
     "${SHOP[@]}" "$BASE/assets/missing.js"
@@ -276,6 +287,10 @@ check_body admin-fixture \
 check_header Cache-Control "max-age=31536000" \
     "admin assets are cached for a year" \
     "${ADMIN[@]}" "$BASE/assets/app-abc123.js"
+
+check_status 200 \
+    "uploaded images resolve on the admin host too" \
+    "${ADMIN[@]}" "$BASE/media/products/test.png"
 
 printf '\n'
 if [ "$FAILURES" -ne 0 ]; then

@@ -220,3 +220,40 @@ func TestUpdateProductPartial(t *testing.T) {
 		t.Errorf("err = %v, want ErrProductNotFound", err)
 	}
 }
+
+func TestMemoryCreateProduct(t *testing.T) {
+	repo := newTestRepo()
+
+	created, err := repo.Create(model.ProductInput{
+		Name:        "New",
+		Description: "from the dashboard",
+		Images:      []string{"/media/products/a.png"},
+		Price:       2500,
+		Stock:       4,
+		WeightGram:  120,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID != 3 {
+		t.Fatalf("id = %d, want 3", created.ID)
+	}
+	if !created.IsAvailable {
+		t.Error("availability should default to true")
+	}
+	if created.Name != "New" || created.Price != 2500 || created.Stock != 4 || created.WeightGram != 120 {
+		t.Fatalf("created = %+v", created)
+	}
+	if len(created.Images) != 1 || created.Images[0] != "/media/products/a.png" {
+		t.Fatalf("images = %#v", created.Images)
+	}
+
+	hidden := false
+	second, err := repo.Create(model.ProductInput{Name: "Hidden", Price: 1, Stock: 1, WeightGram: 10, IsAvailable: &hidden})
+	if err != nil {
+		t.Fatalf("Create hidden: %v", err)
+	}
+	if second.ID != 4 || second.IsAvailable {
+		t.Fatalf("second = %+v", second)
+	}
+}

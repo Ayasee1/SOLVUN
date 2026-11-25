@@ -8,6 +8,17 @@ export class ApiError extends Error {
   }
 }
 
+async function errorFrom(res: Response): Promise<ApiError> {
+  let message = res.statusText
+  try {
+    const body = await res.json()
+    if (body?.error) message = body.error
+  } catch {
+    // response had no JSON body
+  }
+  return new ApiError(res.status, message)
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -21,19 +32,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
 
   if (!res.ok) {
-    let message = res.statusText
-    try {
-      const body = await res.json()
-      if (body?.error) message = body.error
-    } catch {
-      // response had no JSON body
-    }
-    throw new ApiError(res.status, message)
+    throw await errorFrom(res)
   }
 
   if (res.status === 204) {
     return undefined as T
   }
+  return (await res.json()) as T
+}
+
+// upload posts multipart data (file uploads). The browser sets the boundary, so
+// no Content-Type header here.
+async function upload<T>(path: string, formData: FormData): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  })
+
+  if (!res.ok) {
+    throw await errorFrom(res)
+  }
+
   return (await res.json()) as T
 }
 
@@ -47,4 +67,5 @@ export const api = {
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  upload,
 }

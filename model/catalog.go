@@ -19,13 +19,27 @@ type Product struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+// ProductInput is the input for creating a product from the dashboard.
+type ProductInput struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Images      []string `json:"images"`
+	Price       int      `json:"price"`
+	Stock       int      `json:"stock"`
+	IsAvailable *bool    `json:"is_available"`
+	WeightGram  int      `json:"weight_gram"`
+}
+
 // ProductUpdate is the (partial) input for updating a product.
 // Pointer fields let us tell "not provided" apart from a zero value.
 type ProductUpdate struct {
-	Name        *string `json:"name"`
-	Price       *int    `json:"price"`
-	Stock       *int    `json:"stock"`
-	IsAvailable *bool   `json:"is_available"`
+	Name        *string   `json:"name"`
+	Description *string   `json:"description"`
+	Images      *[]string `json:"images"`
+	Price       *int      `json:"price"`
+	Stock       *int      `json:"stock"`
+	IsAvailable *bool     `json:"is_available"`
+	WeightGram  *int      `json:"weight_gram"`
 }
 
 type Catalog struct {
