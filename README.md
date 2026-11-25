@@ -242,6 +242,9 @@ already ran locally.
    reserved, or `needs_refund` with no stock touched; a crash cannot leave the
    two halves out of sync.
 3. A paid order creates a shipment through the configured shipping provider.
+   If the provider call fails, a background job retries it with a delay, up to
+   `SHIPMENT_RETRY_MAX_ATTEMPTS`; after that the ops digest reports it and the
+   order page offers a manual retry.
 4. Unpaid orders are expired by the sweeper after `ORDER_PENDING_TTL_MINUTES`
    and their stock is released. Before expiring, the sweeper asks Midtrans for
    the real status: a payment that settled while the webhook was missing is
@@ -343,6 +346,13 @@ The digest goes out one minute after startup and then every
 inbox therefore means nothing is waiting. It uses the same sender as customer
 mail, so with no provider configured it is only logged.
 
+Shipment creation is also retried automatically before an order reaches the
+digest: the retrier looks at paid orders without a shipment every
+`SHIPMENT_RETRY_INTERVAL_MINUTES`, counts the attempt before calling the provider,
+and stops after `SHIPMENT_RETRY_MAX_ATTEMPTS`. All three paths (settlement, the
+admin button, and the retrier) share one idempotent create, so a recovering
+provider never gets two shipments for the same order.
+
 ## Configuration
 
 All variables are documented in `.env.example`. The most important ones:
@@ -365,6 +375,9 @@ All variables are documented in `.env.example`. The most important ones:
 | `OPS_EMAIL` | recipient for the refund/shipment digest; empty disables it |
 | `OPS_ALERT_INTERVAL_HOURS` | digest interval (default 24) |
 | `OPS_ALERT_GRACE_MINUTES` | ignore paid orders younger than this (default 10) |
+| `SHIPMENT_RETRY_ENABLED` | retry failed shipment creation in the background (default `true`) |
+| `SHIPMENT_RETRY_MAX_ATTEMPTS` | attempts per order before giving up (default 5) |
+| `SHIPMENT_RETRY_INTERVAL_MINUTES` | delay between attempts and the job interval (default 10) |
 
 ## Deployment
 
@@ -397,8 +410,9 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
   not crash-atomic; production uses the transactional path.
 - `needs_refund` is a flag, not an integration: refunds are still issued by hand
   in the Midtrans dashboard. The daily digest lists them so they are not missed.
-- A failed shipment can be retried from the order page, but there is no
-  background retry loop; the digest lists orders that are stuck.
+- Shipment creation is retried automatically a bounded number of times; after
+  that the digest lists the order and the order page offers a manual retry.
+  The retry delay is fixed, not exponential.
 - Admin lists load every row. Orders accept a `?status=` filter, but there is no
   pagination anywhere and the product list is filtered in the browser.
 - `GET /orders/:id` is a capability URL: anyone holding the link can read the

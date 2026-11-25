@@ -77,6 +77,35 @@ func TestOpsAlertDefaults(t *testing.T) {
 	}
 }
 
+func TestShipmentRetrySettings(t *testing.T) {
+	t.Setenv("SHIPMENT_RETRY_ENABLED", "false")
+	t.Setenv("SHIPMENT_RETRY_MAX_ATTEMPTS", "3")
+	t.Setenv("SHIPMENT_RETRY_INTERVAL_MINUTES", "20")
+
+	cfg := Load()
+
+	if cfg.ShipmentRetryEnabled {
+		t.Fatal("ShipmentRetryEnabled should be false")
+	}
+	if cfg.ShipmentRetryMaxAttempts != 3 {
+		t.Fatalf("ShipmentRetryMaxAttempts = %d, want 3", cfg.ShipmentRetryMaxAttempts)
+	}
+	if cfg.ShipmentRetryIntervalMinutes != 20 {
+		t.Fatalf("ShipmentRetryIntervalMinutes = %d, want 20", cfg.ShipmentRetryIntervalMinutes)
+	}
+
+	t.Setenv("SHIPMENT_RETRY_ENABLED", "")
+	t.Setenv("SHIPMENT_RETRY_MAX_ATTEMPTS", "")
+	t.Setenv("SHIPMENT_RETRY_INTERVAL_MINUTES", "")
+
+	cfg = Load()
+
+	if !cfg.ShipmentRetryEnabled || cfg.ShipmentRetryMaxAttempts != 5 || cfg.ShipmentRetryIntervalMinutes != 10 {
+		t.Fatalf("defaults = %v/%d/%d, want true/5/10",
+			cfg.ShipmentRetryEnabled, cfg.ShipmentRetryMaxAttempts, cfg.ShipmentRetryIntervalMinutes)
+	}
+}
+
 func TestRateLimitSetting(t *testing.T) {
 	t.Setenv("RATE_LIMIT_ENABLED", "")
 

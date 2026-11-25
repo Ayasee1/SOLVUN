@@ -70,6 +70,11 @@ type Config struct {
 	// OpsAlertGraceMinutes keeps brand-new paid orders out of the digest while
 	// the normal settlement path is still creating their shipment (default 10).
 	OpsAlertGraceMinutes int
+	// ShipmentRetry* control the background job that retries shipment creation
+	// for paid orders whose provider call failed.
+	ShipmentRetryEnabled         bool
+	ShipmentRetryMaxAttempts     int
+	ShipmentRetryIntervalMinutes int
 }
 
 // Load reads configuration from the environment, falling back to safe defaults.
@@ -96,6 +101,10 @@ func Load() Config {
 		OpsEmail:              strings.TrimSpace(os.Getenv("OPS_EMAIL")),
 		OpsAlertIntervalHours: getEnvInt("OPS_ALERT_INTERVAL_HOURS", 24),
 		OpsAlertGraceMinutes:  getEnvInt("OPS_ALERT_GRACE_MINUTES", 10),
+
+		ShipmentRetryEnabled:         getEnvBool("SHIPMENT_RETRY_ENABLED", true),
+		ShipmentRetryMaxAttempts:     getEnvInt("SHIPMENT_RETRY_MAX_ATTEMPTS", 5),
+		ShipmentRetryIntervalMinutes: getEnvInt("SHIPMENT_RETRY_INTERVAL_MINUTES", 10),
 
 		ResendAPIKey: os.Getenv("RESEND_API_KEY"),
 		SMTPHost:     os.Getenv("SMTP_HOST"),
