@@ -113,6 +113,9 @@ previous run for that branch.
 
 - The frontend jobs use Bun `1.3.14` (pinned in `env.BUN_VERSION`) and cache
   `~/.bun/install/cache` keyed on the matching `bun.lock`.
+- Runners are pinned to `ubuntu-24.04`. `ubuntu-latest` moved to Ubuntu 26.04,
+  which Playwright 1.59.1 does not support; bump the image and Playwright
+  together.
 - `--frozen-lockfile` fails the build when `package.json` and the lockfile
   disagree, which catches a forgotten `bun install`.
 - The Go job uses the version in `go.mod` and enables the module cache.
