@@ -748,6 +748,79 @@ func (h *OrderHandler) RetryShipment(c *fiber.Ctx) error {
 	return c.JSON(order)
 }
 
+// RefundOrder (admin) refunds a captured payment for an order that can no longer
+// be fulfilled. Only full refunds are supported; the refund key is the order id,
+// so a retry cannot refund twice.
+func (h *OrderHandler) RefundOrder(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid order id",
+		})
+	}
+
+	order, err := h.orderRepo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error": "Order not found",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Internal server error",
+		})
+	}
+
+	// Already refunded: report the stored result instead of calling the gateway.
+	if order.Status == model.OrderStatusRefunded {
+		return c.JSON(order)
+	}
+	if order.Status != model.OrderStatusNeedsRefund {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"error": fmt.Sprintf("Only orders that need a refund can be refunded (current status: %s)", order.Status),
+		})
+	}
+	if order.Payment == nil {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"error": "Order has no recorded payment",
+		})
+	}
+
+	const reason = "Refunded from the admin dashboard"
+	if err := h.gateway.Refund(order.ID.String(), order.Total, reason); err != nil {
+		log.Printf("refund failed for order %s: %v", order.ID, err)
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+			"error": "Refund failed: " + err.Error(),
+		})
+	}
+
+	info := model.RefundInfo{
+		Key:        order.ID.String(),
+		Amount:     order.Total,
+		Reason:     reason,
+		RefundedAt: time.Now(),
+	}
+	updated, ok, err := h.orderRepo.TransitionStatusWithRefund(order.ID, model.OrderStatusNeedsRefund, model.OrderStatusRefunded, info)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Refund succeeded but the order could not be updated",
+		})
+	}
+	if !ok {
+		// Someone else changed the status while we were refunding; return the
+		// current state so the dashboard shows the truth.
+		current, ferr := h.orderRepo.FindByID(order.ID)
+		if ferr != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "Internal server error",
+			})
+		}
+		return c.JSON(current)
+	}
+
+	return c.JSON(updated)
+}
+
 func toShipmentEvents(events []shipping.ShipmentEvent) []model.ShipmentEvent {
 	out := make([]model.ShipmentEvent, 0, len(events))
 	for _, event := range events {

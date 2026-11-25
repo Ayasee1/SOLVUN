@@ -4,6 +4,7 @@ export const orderStatuses = [
   'expired',
   'cancelled',
   'needs_refund',
+  'refunded',
 ] as const
 
 export type OrderStatus = (typeof orderStatuses)[number]
@@ -44,6 +45,13 @@ export type ShipmentEvent = {
   updated_at?: string
 }
 
+export type RefundInfo = {
+  key: string
+  amount: number
+  reason?: string
+  refunded_at: string
+}
+
 export type ShipmentInfo = {
   provider_id?: string
   waybill_id?: string
@@ -68,5 +76,6 @@ export type Order = {
   payment_url?: string
   payment?: PaymentInfo
   shipment?: ShipmentInfo
+  refund?: RefundInfo
   created_at: string
 }

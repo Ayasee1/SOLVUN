@@ -18,12 +18,13 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { ConfigDrawer } from '@/components/config-drawer'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Header } from '@/components/layout/header'
 import { Main } from '@/components/layout/main'
 import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
-import { cancelOrder, fetchOrder, retryShipment } from '../api'
+import { cancelOrder, fetchOrder, refundOrder, retryShipment } from '../api'
 import { orderStatusClass, paymentMethodLabel } from '../data/status'
 
 const rupiah = new Intl.NumberFormat('id-ID', {
@@ -46,6 +47,8 @@ function formatDate(value: string) {
 export function OrderDetail({ orderId }: { orderId: string }) {
   const [cancelling, setCancelling] = useState(false)
   const [shipping, setShipping] = useState(false)
+  const [refunding, setRefunding] = useState(false)
+  const [confirmRefund, setConfirmRefund] = useState(false)
   const orderQuery = useQuery({
     queryKey: ['orders', orderId],
     queryFn: () => queryWithToast(() => fetchOrder(orderId)),
@@ -82,6 +85,21 @@ export function OrderDetail({ orderId }: { orderId: string }) {
       )
     } finally {
       setShipping(false)
+    }
+  }
+
+  async function onRefund() {
+    if (!order) return
+    setRefunding(true)
+    try {
+      await refundOrder(order.id)
+      toast.success('Refund sent to Midtrans')
+      setConfirmRefund(false)
+      void orderQuery.refetch()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Refund failed')
+    } finally {
+      setRefunding(false)
     }
   }
 
@@ -139,6 +157,15 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                 >
                   <PackageCheck className='size-4' />
                   {shipping ? 'Creating...' : 'Create shipment'}
+                </Button>
+              )}
+              {order.status === 'needs_refund' && (
+                <Button
+                  variant='destructive'
+                  disabled={refunding}
+                  onClick={() => setConfirmRefund(true)}
+                >
+                  {refunding ? 'Refunding...' : 'Refund'}
                 </Button>
               )}
               {order.status === 'pending' && (
@@ -305,6 +332,15 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                           <dd>{order.payment.settled_at}</dd>
                         </>
                       )}
+                      {order.refund && (
+                        <>
+                          <dt className='text-muted-foreground'>Refunded</dt>
+                          <dd>
+                            {rupiah.format(order.refund.amount)} ·{' '}
+                            {formatDate(order.refund.refunded_at)}
+                          </dd>
+                        </>
+                      )}
                     </dl>
                   ) : (
                     <p className='text-muted-foreground'>
@@ -419,6 +455,20 @@ export function OrderDetail({ orderId }: { orderId: string }) {
           </div>
         )}
       </Main>
+
+      <ConfirmDialog
+        open={confirmRefund}
+        onOpenChange={setConfirmRefund}
+        title='Refund this order?'
+        desc={`Refund ${rupiah.format(
+          order?.total ?? 0
+        )} to the customer through Midtrans. This cannot be undone.`}
+        confirmText='Refund'
+        destructive
+        isLoading={refunding}
+        handleConfirm={() => void onRefund()}
+        className='sm:max-w-sm'
+      />
     </>
   )
 }

@@ -66,12 +66,13 @@ const (
 	OrderStatusExpired     OrderStatus = "expired"
 	OrderStatusCancelled   OrderStatus = "cancelled"
 	OrderStatusNeedsRefund OrderStatus = "needs_refund"
+	OrderStatusRefunded    OrderStatus = "refunded"
 )
 
 // Valid reports whether s is a known order status.
 func (s OrderStatus) Valid() bool {
 	switch s {
-	case OrderStatusPending, OrderStatusPaid, OrderStatusExpired, OrderStatusCancelled, OrderStatusNeedsRefund:
+	case OrderStatusPending, OrderStatusPaid, OrderStatusExpired, OrderStatusCancelled, OrderStatusNeedsRefund, OrderStatusRefunded:
 		return true
 	}
 	return false
@@ -101,6 +102,16 @@ type ShipmentInfo struct {
 	TrackingID string          `json:"tracking_id,omitempty"`
 	Status     string          `json:"status,omitempty"`
 	History    []ShipmentEvent `json:"history,omitempty"`
+}
+
+// RefundInfo records a refund issued through the payment gateway.
+type RefundInfo struct {
+	// Key is the idempotency key sent to the gateway. Using the order id means a
+	// retry can never refund the same payment twice.
+	Key        string    `json:"key"`
+	Amount     int       `json:"amount"`
+	Reason     string    `json:"reason,omitempty"`
+	RefundedAt time.Time `json:"refunded_at"`
 }
 
 // ShipmentEvent is one courier tracking entry.
@@ -167,6 +178,7 @@ type UserOrder struct {
 	PaymentURL     string        `json:"payment_url,omitempty"`
 	Payment        *PaymentInfo  `json:"payment,omitempty"`
 	Shipment       *ShipmentInfo `json:"shipment,omitempty"`
+	Refund         *RefundInfo   `json:"refund,omitempty"`
 	// ShipmentAttempts counts how many times the API tried to create the provider
 	// shipment automatically, so a broken order cannot be retried forever.
 	ShipmentAttempts      int        `json:"shipment_attempts,omitempty"`

@@ -6,6 +6,7 @@ export const orderStatusClass: Record<OrderStatus, string> = {
   expired: 'bg-muted text-muted-foreground',
   cancelled: 'bg-muted text-muted-foreground',
   needs_refund: 'bg-red-500/15 text-red-700 dark:text-red-400',
+  refunded: 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
 }
 
 // Human-readable payment method labels (keeps the raw gateway type in the API).
