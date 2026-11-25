@@ -47,16 +47,21 @@ function formatDate(value: string) {
   return formatter.format(new Date(value))
 }
 
+const PAGE_SIZE = 25
+
 export function Orders() {
   const [status, setStatus] = useState<OrderStatus | 'all'>('all')
+  const [page, setPage] = useState(0)
   const ordersQuery = useQuery({
-    queryKey: ['orders', status],
-    queryFn: () => queryWithToast(() => fetchOrders(status)),
+    queryKey: ['orders', status, page],
+    queryFn: () =>
+      queryWithToast(() => fetchOrders(status, PAGE_SIZE, page * PAGE_SIZE)),
     placeholderData: keepPreviousData,
     retry: false,
   })
 
-  const orders = ordersQuery.data ?? []
+  const orders = ordersQuery.data?.items ?? []
+  const total = ordersQuery.data?.total ?? 0
   const loading = ordersQuery.isLoading
 
   return (
@@ -187,6 +192,35 @@ export function Orders() {
                 ))}
             </TableBody>
           </Table>
+
+          <div className='flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-sm'>
+            <p className='text-muted-foreground'>
+              {total === 0
+                ? 'No orders'
+                : `Showing ${page * PAGE_SIZE + 1}–${Math.min(
+                    (page + 1) * PAGE_SIZE,
+                    total
+                  )} of ${total}`}
+            </p>
+            <div className='flex items-center gap-2'>
+              <Button
+                variant='outline'
+                size='sm'
+                disabled={page === 0}
+                onClick={() => setPage((current) => Math.max(0, current - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant='outline'
+                size='sm'
+                disabled={(page + 1) * PAGE_SIZE >= total}
+                onClick={() => setPage((current) => current + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
         </div>
       </Main>
     </>

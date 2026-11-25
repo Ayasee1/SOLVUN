@@ -512,3 +512,52 @@ func TestPostgresTransitionStatusWithRefund(t *testing.T) {
 		t.Fatalf("stored = %+v", stored)
 	}
 }
+
+func TestPostgresOrderPaginationAndStats(t *testing.T) {
+	_, repo := postgresSettleRepo(t)
+
+	oldest := seedPostgresOrder(t, repo, model.OrderStatusPending, []model.Item{{ID: 1, Qty: 1}}, 3*time.Minute)
+	middle := seedPostgresOrder(t, repo, model.OrderStatusPaid, []model.Item{{ID: 1, Qty: 1}}, 2*time.Minute)
+	newest := seedPostgresOrder(t, repo, model.OrderStatusCancelled, []model.Item{{ID: 1, Qty: 1}}, time.Minute)
+
+	first, total, err := repo.GetAll("", 2, 0)
+	if err != nil {
+		t.Fatalf("GetAll: %v", err)
+	}
+	if total != 3 || len(first) != 2 {
+		t.Fatalf("page 1 = %d items, total %d, want 2/3", len(first), total)
+	}
+	if first[0].ID != newest.ID || first[1].ID != middle.ID {
+		t.Fatalf("page 1 order = %s,%s, want newest then middle", first[0].ID, first[1].ID)
+	}
+
+	second, total, err := repo.GetAll("", 2, 2)
+	if err != nil {
+		t.Fatalf("GetAll page 2: %v", err)
+	}
+	if total != 3 || len(second) != 1 || second[0].ID != oldest.ID {
+		t.Fatalf("page 2 = %+v, total %d", second, total)
+	}
+
+	paid, totalPaid, err := repo.GetAll(model.OrderStatusPaid, 10, 0)
+	if err != nil {
+		t.Fatalf("GetAll paid: %v", err)
+	}
+	if totalPaid != 1 || len(paid) != 1 || paid[0].ID != middle.ID {
+		t.Fatalf("paid page = %+v, total %d", paid, totalPaid)
+	}
+
+	stats, err := repo.Stats()
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.Total != 3 {
+		t.Fatalf("total = %d, want 3", stats.Total)
+	}
+	if stats.ByStatus[model.OrderStatusPending] != 1 || stats.ByStatus[model.OrderStatusPaid] != 1 || stats.ByStatus[model.OrderStatusCancelled] != 1 {
+		t.Fatalf("by status = %+v", stats.ByStatus)
+	}
+	if stats.Revenue != 2000 {
+		t.Fatalf("revenue = %d, want 2000", stats.Revenue)
+	}
+}

@@ -281,7 +281,9 @@ Admin, all requiring a session:
 | `POST` | `/admin/session` | sign in |
 | `GET` | `/admin/session` | session status |
 | `DELETE` | `/admin/session` | sign out |
-| `GET` | `/admin/orders`, `/admin/orders/:id` | order list and detail |
+| `GET` | `/admin/stats` | dashboard aggregate: totals, revenue, counts by status |
+| `GET` | `/admin/orders` | paginated list (`status`, `limit`, `offset`; returns `{items,total,limit,offset}`) |
+| `GET` | `/admin/orders/:id` | order detail |
 | `POST` | `/admin/orders/:id/shipment` | create the shipment for a paid order whose provider call failed |
 | `POST` | `/admin/orders/:id/refund` | full refund of a `needs_refund` order through Midtrans |
 | `GET` | `/admin/products` | product list, including hidden ones |
@@ -418,8 +420,9 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 - Shipment creation is retried automatically a bounded number of times; after
   that the digest lists the order and the order page offers a manual retry.
   The retry delay is fixed, not exponential.
-- Admin lists load every row. Orders accept a `?status=` filter, but there is no
-  pagination anywhere and the product list is filtered in the browser.
+- Admin orders are paginated server-side (`limit`, `offset`, `total`). The
+  product list still loads in full and filters in the browser; the catalog is
+  small enough for that to be fine for now.
 - `GET /orders/:id` is a capability URL: anyone holding the link can read the
   order, including customer details. UUIDs make guessing impractical, but the
   link should still be treated as a secret.

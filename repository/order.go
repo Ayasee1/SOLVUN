@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -10,11 +11,43 @@ import (
 	"golearn/model"
 )
 
+// Page bounds for admin lists. The handler and the repositories share them so a
+// request can never dump the whole table.
+const (
+	DefaultPageSize = 25
+	MaxPageSize     = 100
+)
+
+// PageBounds clamps a requested page to safe values.
+func PageBounds(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = DefaultPageSize
+	}
+	if limit > MaxPageSize {
+		limit = MaxPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+// OrderStats is the dashboard aggregate over every order, computed without
+// loading the rows.
+type OrderStats struct {
+	Total    int
+	Revenue  int
+	ByStatus map[model.OrderStatus]int
+}
+
 // OrderRepository is the data access contract for orders.
 type OrderRepository interface {
 	Save(order model.UserOrder) error
-	// GetAll returns orders, optionally filtered by status ("" means all).
-	GetAll(status model.OrderStatus) ([]model.UserOrder, error)
+	// GetAll returns one page of orders, newest first, optionally filtered by
+	// status ("" means all), plus the total number of matching orders.
+	GetAll(status model.OrderStatus, limit, offset int) ([]model.UserOrder, int, error)
+	// Stats returns the dashboard aggregate.
+	Stats() (OrderStats, error)
 	// GetStalePending returns pending orders created before the cutoff, used by
 	// the sweeper to expire orders whose payment never completed.
 	GetStalePending(before time.Time) ([]model.UserOrder, error)
@@ -93,18 +126,49 @@ func (r *MemoryOrderRepository) Save(order model.UserOrder) error {
 	return nil
 }
 
-func (r *MemoryOrderRepository) GetAll(status model.OrderStatus) ([]model.UserOrder, error) {
+func (r *MemoryOrderRepository) GetAll(status model.OrderStatus, limit, offset int) ([]model.UserOrder, int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	out := make([]model.UserOrder, 0, len(r.orders))
+	limit, offset = PageBounds(limit, offset)
+
+	filtered := make([]model.UserOrder, 0, len(r.orders))
 	for _, order := range r.orders {
 		if status != "" && order.Status != status {
 			continue
 		}
-		out = append(out, order)
+		filtered = append(filtered, order)
 	}
-	return out, nil
+
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
+	})
+
+	total := len(filtered)
+	if offset >= total {
+		return []model.UserOrder{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return filtered[offset:end], total, nil
+}
+
+// Stats aggregates every order for the dashboard.
+func (r *MemoryOrderRepository) Stats() (OrderStats, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	stats := OrderStats{ByStatus: make(map[model.OrderStatus]int)}
+	for _, order := range r.orders {
+		stats.Total++
+		stats.ByStatus[order.Status]++
+		if order.Status == model.OrderStatusPaid {
+			stats.Revenue += order.Total
+		}
+	}
+	return stats, nil
 }
 
 func (r *MemoryOrderRepository) GetStalePending(before time.Time) ([]model.UserOrder, error) {

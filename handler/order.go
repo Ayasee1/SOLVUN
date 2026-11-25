@@ -896,7 +896,8 @@ func (h *OrderHandler) ExpirePayment(id uuid.UUID) {
 	h.expirePayment(id)
 }
 
-// GetOrders lists orders (admin), optionally filtered by ?status=
+// GetOrders lists orders (admin), optionally filtered by ?status= and paginated
+// with ?limit= and ?offset=.
 func (h *OrderHandler) GetOrders(c *fiber.Ctx) error {
 	status := model.OrderStatus(c.Query("status"))
 	if status != "" && !status.Valid() {
@@ -905,14 +906,37 @@ func (h *OrderHandler) GetOrders(c *fiber.Ctx) error {
 		})
 	}
 
-	orders, err := h.orderRepo.GetAll(status)
+	limit, offset := repository.PageBounds(c.QueryInt("limit", repository.DefaultPageSize), c.QueryInt("offset", 0))
+
+	orders, total, err := h.orderRepo.GetAll(status, limit, offset)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to load orders",
 		})
 	}
 
-	return c.JSON(orders)
+	return c.JSON(fiber.Map{
+		"items":  orders,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
+// GetStats returns the dashboard aggregate without loading every order.
+func (h *OrderHandler) GetStats(c *fiber.Ctx) error {
+	stats, err := h.orderRepo.Stats()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to load stats",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"orders_total": stats.Total,
+		"revenue":      stats.Revenue,
+		"by_status":    stats.ByStatus,
+	})
 }
 
 // get order by id handler

@@ -71,6 +71,7 @@ func SetupRoutes(app *fiber.App, ph *handler.ProductHandler, oh *handler.OrderHa
 
 	// admin only
 	admin := app.Group("/admin", middleware.AdminAuth(adminSessions))
+	admin.Get("/stats", oh.GetStats)
 	admin.Get("/orders", oh.GetOrders)
 	admin.Get("/orders/:id", oh.GetOrderByID)
 	admin.Post("/orders/:id/shipment", oh.RetryShipment)
