@@ -74,7 +74,9 @@ func newFlowApp(t *testing.T, products repository.ProductRepository, orders repo
 		products = repository.NewMemoryProductRepository()
 	}
 	if orders == nil {
-		orders = repository.NewMemoryOrderRepository()
+		memoryOrders := repository.NewMemoryOrderRepository()
+		memoryOrders.SetProducts(products)
+		orders = memoryOrders
 	}
 
 	app := fiber.New()
@@ -204,9 +206,11 @@ func settlement(grossAmount string) *payment.StatusResult {
 // status update. The payment is real, so the order must end up paid (stock is
 // available again) or needs_refund (stock is gone) - never silently expired.
 func TestFlowSettlementRacingTheSweeper(t *testing.T) {
+	products := repository.NewMemoryProductRepository()
 	realOrders := repository.NewMemoryOrderRepository()
+	realOrders.SetProducts(products)
 	orders := &staleReadOrderRepo{MemoryOrderRepository: realOrders}
-	flow := newFlowApp(t, nil, orders, "")
+	flow := newFlowApp(t, products, orders, "")
 
 	order := validOrder(model.Item{ID: 1, Qty: 2})
 	order.Courier = "jne"

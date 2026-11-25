@@ -385,33 +385,35 @@ func (h *OrderHandler) settlePaidOrder(order *model.UserOrder, status *payment.S
 		return nil
 	}
 
-	// Claim the order before touching stock. The compare-and-set only succeeds
-	// for one of several concurrent notifications, and it also covers the window
-	// where the sweeper expires the order between our read and our write.
+	// Claim the order and reserve stock in one unit of work. The claim only
+	// succeeds for one of several concurrent notifications, and a crash cannot
+	// leave the order paid without its stock (or the reverse).
 	from := order.Status
-	claimed, confirmed, err := h.orderRepo.TransitionStatusWithPayment(order.ID, from, model.OrderStatusPaid, info)
+	reserveStock := from == model.OrderStatusExpired || from == model.OrderStatusCancelled
+
+	claimed, outcome, err := h.orderRepo.SettlePaid(order.ID, from, info, requestedItems(order), reserveStock)
 	if err != nil {
 		return err
 	}
 
-	if !confirmed {
+	if outcome == repository.SettleNotClaimed {
+		// The status changed between our read and the claim: re-read and retry
+		// once against whatever won (usually the sweeper expiring the order).
 		current, findErr := h.orderRepo.FindByID(order.ID)
 		if findErr != nil {
 			return findErr
 		}
+
 		switch current.Status {
 		case model.OrderStatusPaid, model.OrderStatusNeedsRefund:
-			// Another notification settled it while we were reading.
 			return nil
 		case model.OrderStatusExpired, model.OrderStatusCancelled:
-			// The sweeper (or a cancel) won the race: the payment still arrived,
-			// so retry the claim against the status we found.
-			from = current.Status
-			claimed, confirmed, err = h.orderRepo.TransitionStatusWithPayment(order.ID, from, model.OrderStatusPaid, info)
+			claimed, outcome, err = h.orderRepo.SettlePaid(
+				order.ID, current.Status, info, requestedItems(current), true)
 			if err != nil {
 				return err
 			}
-			if !confirmed {
+			if outcome == repository.SettleNotClaimed {
 				return nil
 			}
 		default:
@@ -419,16 +421,9 @@ func (h *OrderHandler) settlePaidOrder(order *model.UserOrder, status *payment.S
 		}
 	}
 
-	// Pending orders reserved their stock at creation. Expired and cancelled
-	// orders had it released, so take it back now that this call owns the order.
-	if from == model.OrderStatusExpired || from == model.OrderStatusCancelled {
-		if err := h.productRepo.DecreaseStock(requestedItems(claimed)); err != nil {
-			// The order can no longer be fulfilled: flag it for a manual refund.
-			if _, _, rerr := h.orderRepo.TransitionStatusWithPayment(order.ID, model.OrderStatusPaid, model.OrderStatusNeedsRefund, info); rerr != nil {
-				return rerr
-			}
-			return nil
-		}
+	if outcome == repository.SettleNeedsRefund {
+		// The payment is recorded and the order flagged; someone refunds it.
+		return nil
 	}
 
 	if shipment := h.createShipment(*claimed); shipment != nil {
