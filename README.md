@@ -84,11 +84,17 @@ cd admin && bun run format:check
 cd admin && bun run build
 cd admin && bun run test:browser:install   # once, downloads Chromium
 cd admin && bun run test
+
+# Nginx (needs docker): syntax, then real routing against a mock upstream
+bash deploy/nginx/test.sh
 ```
 
 If Vitest reports a missing browser, re-run `bun run test:browser:install` in
 `admin/`: the Playwright cache is shared with other projects on the machine and
 an install elsewhere can remove the revision this project pinned.
+
+`deploy/nginx/test.sh` accepts `NGINX_IMAGE` so you can check the exact version
+the VPS runs, for example `NGINX_IMAGE=nginx:1.27-alpine`.
 
 ## Continuous integration
 
@@ -102,6 +108,7 @@ previous run for that branch.
 | `storefront` | `bun install --frozen-lockfile`, `bun run build`, uploads `web/dist` |
 | `admin` | `bun install --frozen-lockfile`, `bun run lint`, `format:check`, build, uploads `admin/dist` |
 | `admin-tests` | installs Playwright Chromium, runs the Vitest browser suite |
+| `nginx` | `nginx -t` with dummy certificates, then a routing test against a mock upstream |
 | `ci` | aggregate gate: fails if any of the jobs above did not succeed |
 
 - The frontend jobs use Bun `1.3.14` (pinned in `env.BUN_VERSION`) and cache
