@@ -1,5 +1,3 @@
-const API_KEY = import.meta.env.VITE_ADMIN_API_KEY ?? ''
-
 export class ApiError extends Error {
   status: number
 
@@ -13,9 +11,11 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
+    // The admin session lives in an HttpOnly cookie, so every request has to
+    // carry it. No API key is compiled into the bundle.
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'X-API-Key': API_KEY,
       ...init?.headers,
     },
   })

@@ -5,10 +5,11 @@ import (
 
 	"golearn/handler"
 	"golearn/middleware"
+	"golearn/session"
 )
 
 // SetupRoutes sets up the routes for the Fiber application
-func SetupRoutes(app *fiber.App, ph *handler.ProductHandler, oh *handler.OrderHandler, sh *handler.ShippingHandler, sc *handler.StoreConfigHandler, adminAPIKey string) {
+func SetupRoutes(app *fiber.App, ph *handler.ProductHandler, oh *handler.OrderHandler, sh *handler.ShippingHandler, sc *handler.StoreConfigHandler, adminAuth *handler.AdminAuthHandler, adminSessions *session.Store) {
 	// health check for deploys and uptime probes
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "golearn", "build": "preflight-watch-2"})
@@ -34,8 +35,14 @@ func SetupRoutes(app *fiber.App, ph *handler.ProductHandler, oh *handler.OrderHa
 	app.Post("/orders/:id/cancel", oh.CancelOrder)
 	app.Post("/orders/notification", oh.Notification)
 
+	// admin session endpoints are public; they are registered before the admin
+	// group so the auth middleware never applies to them.
+	app.Post("/admin/session", adminAuth.Login)
+	app.Get("/admin/session", adminAuth.Session)
+	app.Delete("/admin/session", adminAuth.Logout)
+
 	// admin only
-	admin := app.Group("/admin", middleware.AdminAuth(adminAPIKey))
+	admin := app.Group("/admin", middleware.AdminAuth(adminSessions))
 	admin.Get("/orders", oh.GetOrders)
 	admin.Get("/orders/:id", oh.GetOrderByID)
 	admin.Get("/products", ph.GetAllProducts)

@@ -37,6 +37,8 @@ import (
 	"golearn/repository"
 	// routes
 	"golearn/routes"
+	// session
+	"golearn/session"
 	// shipping
 	"golearn/shipping"
 	// sweeper
@@ -123,6 +125,14 @@ func main() {
 	shippingHandler := handler.NewShippingHandler(shippingProvider, productRepo)
 	storeConfigHandler := handler.NewStoreConfigHandler(cfg.MidtransClientKey, cfg.MidtransEnv)
 
+	// Admin sessions live in memory and are revoked on restart.
+	adminSessions := session.NewStore(time.Duration(cfg.AdminSessionTTLMinutes) * time.Minute)
+	go adminSessions.RunCleanup(ctx, 10*time.Minute)
+	adminAuthHandler := handler.NewAdminAuthHandler(cfg, adminSessions)
+	if cfg.AdminEmail == "" || cfg.AdminPasswordHash == "" {
+		log.Println("admin sign-in is disabled: set ADMIN_EMAIL and ADMIN_PASSWORD_HASH")
+	}
+
 	// Expire unpaid orders so their reserved stock returns to the catalog even
 	// when the payment webhook never arrives.
 	orderSweeper := sweeper.New(orderRepo, productRepo,
@@ -142,7 +152,7 @@ func main() {
 	}))
 
 	// Setup routes
-	routes.SetupRoutes(app, productHandler, orderHandler, shippingHandler, storeConfigHandler, cfg.AdminAPIKey)
+	routes.SetupRoutes(app, productHandler, orderHandler, shippingHandler, storeConfigHandler, adminAuthHandler, adminSessions)
 
 	// Start the server, then wait for a shutdown signal.
 	go func() {
