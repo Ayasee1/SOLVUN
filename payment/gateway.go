@@ -34,4 +34,7 @@ type StatusResult struct {
 type Gateway interface {
 	Charge(order model.UserOrder) (*ChargeResult, error)
 	CheckStatus(orderID string) (*StatusResult, error)
+	// Refund returns the money for a captured payment. It must be idempotent per
+	// order: retrying after a crash cannot refund the same payment twice.
+	Refund(orderID string, amount int, reason string) error
 }

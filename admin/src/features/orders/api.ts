@@ -20,3 +20,9 @@ export function cancelOrder(id: string) {
 export function retryShipment(id: string) {
   return api.post<Order>(`/admin/orders/${id}/shipment`)
 }
+
+// refundOrder asks the API to refund the captured payment of a needs_refund
+// order. Only full refunds are supported.
+export function refundOrder(id: string) {
+  return api.post<Order>(`/admin/orders/${id}/refund`)
+}

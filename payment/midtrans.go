@@ -106,6 +106,21 @@ func (g *MidtransGateway) Charge(order model.UserOrder) (*ChargeResult, error) {
 	}, nil
 }
 
+// Refund returns the money for a captured payment. The refund key is the order
+// id, which makes the call idempotent: Midtrans will not refund the same payment
+// twice if the request is retried.
+func (g *MidtransGateway) Refund(orderID string, amount int, reason string) error {
+	_, mErr := g.core.RefundTransaction(orderID, &coreapi.RefundReq{
+		RefundKey: orderID,
+		Amount:    int64(amount),
+		Reason:    reason,
+	})
+	if mErr != nil {
+		return errors.New(mErr.GetMessage())
+	}
+	return nil
+}
+
 func (g *MidtransGateway) CheckStatus(orderID string) (*StatusResult, error) {
 	resp, mErr := g.core.CheckTransaction(orderID)
 	if mErr != nil {

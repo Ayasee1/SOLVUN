@@ -41,6 +41,8 @@ type countingGateway struct {
 	statusCalls int
 	status      *payment.StatusResult
 	statusErr   error
+	refundCalls int
+	refundErr   error
 }
 
 func (g *countingGateway) Charge(model.UserOrder) (*payment.ChargeResult, error) {
@@ -61,10 +63,23 @@ func (g *countingGateway) CheckStatus(string) (*payment.StatusResult, error) {
 	return g.status, nil
 }
 
+func (g *countingGateway) Refund(string, int, string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.refundCalls++
+	return g.refundErr
+}
+
 func (g *countingGateway) calls() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.statusCalls
+}
+
+func (g *countingGateway) refunds() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.refundCalls
 }
 
 func newFlowApp(t *testing.T, products repository.ProductRepository, orders repository.OrderRepository, serverKey string) *flowApp {
@@ -96,6 +111,7 @@ func newFlowApp(t *testing.T, products repository.ProductRepository, orders repo
 	app.Get("/orders/:id", orderHandler.GetOrderByID)
 	app.Post("/orders/:id/cancel", orderHandler.CancelOrder)
 	app.Post("/admin/orders/:id/shipment", orderHandler.RetryShipment)
+	app.Post("/admin/orders/:id/refund", orderHandler.RefundOrder)
 	app.Post("/shipping/notification", orderHandler.ShippingNotification)
 
 	return &flowApp{
@@ -683,6 +699,107 @@ func postJSONWithHeader(t *testing.T, app *fiber.App, path string, body any, nam
 		t.Fatal(err)
 	}
 	return resp
+}
+
+// needsRefundOrder drives the real flow into the needs_refund state: the order
+// is cancelled (stock released), another order takes the stock, then the first
+// one is paid late and cannot be fulfilled.
+func needsRefundOrder(t *testing.T, flow *flowApp) model.UserOrder {
+	t.Helper()
+
+	_, first := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 10}))
+	cancelReq, _ := http.NewRequest(http.MethodPost, "/orders/"+first.ID.String()+"/cancel", nil)
+	if resp, err := flow.app.Test(cancelReq); err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	if _, second := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 10})); second.ID == uuid.Nil {
+		t.Fatal("second order failed")
+	}
+
+	flow.gateway.status = settlement("10000.00")
+	if resp := notify(t, flow.app, first.ID); resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("notification status = %d", resp.StatusCode)
+	}
+
+	stored, err := flow.orders.FindByID(first.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+	if stored.Status != model.OrderStatusNeedsRefund {
+		t.Fatalf("status = %q, want needs_refund", stored.Status)
+	}
+	return *stored
+}
+
+// Case 11: a full refund from the dashboard moves the order to refunded and is
+// idempotent, so a double click cannot refund twice.
+func TestFlowAdminRefundMarksOrderRefunded(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+	order := needsRefundOrder(t, flow)
+
+	path := "/admin/orders/" + order.ID.String() + "/refund"
+	resp := postJSON(t, flow.app, path, nil)
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("refund status = %d, want 200", resp.StatusCode)
+	}
+
+	var updated model.UserOrder
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode order: %v", err)
+	}
+	if updated.Status != model.OrderStatusRefunded {
+		t.Fatalf("status = %q, want refunded", updated.Status)
+	}
+	if updated.Refund == nil || updated.Refund.Amount != 10000 {
+		t.Fatalf("refund = %+v, want amount 10000", updated.Refund)
+	}
+
+	// A second click must not call the gateway again.
+	if again := postJSON(t, flow.app, path, nil); again.StatusCode != fiber.StatusOK {
+		t.Fatalf("second refund status = %d, want 200", again.StatusCode)
+	}
+	if got := flow.gateway.refunds(); got != 1 {
+		t.Fatalf("gateway refund calls = %d, want 1", got)
+	}
+}
+
+func TestFlowRefundFailureKeepsNeedsRefund(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+	order := needsRefundOrder(t, flow)
+	flow.gateway.refundErr = errors.New("refund not supported for this payment method")
+
+	resp := postJSON(t, flow.app, "/admin/orders/"+order.ID.String()+"/refund", nil)
+	if resp.StatusCode != fiber.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+
+	stored, err := flow.orders.FindByID(order.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+	if stored.Status != model.OrderStatusNeedsRefund {
+		t.Fatalf("status = %q, want needs_refund", stored.Status)
+	}
+	if stored.Refund != nil {
+		t.Fatal("a failed refund must not be recorded")
+	}
+	if got := flow.gateway.refunds(); got != 1 {
+		t.Fatalf("gateway refund calls = %d, want 1", got)
+	}
+}
+
+func TestFlowRefundRejectsOrderThatDoesNotNeedIt(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 2}))
+
+	resp := postJSON(t, flow.app, "/admin/orders/"+created.ID.String()+"/refund", nil)
+	if resp.StatusCode != fiber.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if got := flow.gateway.refunds(); got != 0 {
+		t.Fatalf("gateway refund calls = %d, want 0", got)
+	}
 }
 
 func stockOf(t *testing.T, app *fiber.App, productID int) int {

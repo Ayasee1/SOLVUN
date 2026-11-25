@@ -26,7 +26,7 @@ func NewPostgresOrderRepository(pool *pgxpool.Pool) *PostgresOrderRepository {
 	return &PostgresOrderRepository{pool: pool}
 }
 
-const orderColumns = `id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, created_at, shipment_attempts, shipment_last_attempt_at`
+const orderColumns = `id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, refund, created_at, shipment_attempts, shipment_last_attempt_at`
 
 func (r *PostgresOrderRepository) Save(order model.UserOrder) error {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
@@ -48,6 +48,10 @@ func (r *PostgresOrderRepository) Save(order model.UserOrder) error {
 	if err != nil {
 		return err
 	}
+	refund, err := marshalRefund(order.Refund)
+	if err != nil {
+		return err
+	}
 
 	createdAt := order.CreatedAt
 	if createdAt.IsZero() {
@@ -55,11 +59,11 @@ func (r *PostgresOrderRepository) Save(order model.UserOrder) error {
 	}
 
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO orders (id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, created_at, shipment_attempts, shipment_last_attempt_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+		INSERT INTO orders (id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, refund, created_at, shipment_attempts, shipment_last_attempt_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 		order.ID, order.Username, order.Email, order.Phone, address, items,
 		order.Total, order.Status, order.ShippingCost, order.Courier, order.CourierService,
-		order.SnapToken, order.PaymentURL, payment, shipment, createdAt,
+		order.SnapToken, order.PaymentURL, payment, shipment, refund, createdAt,
 		order.ShipmentAttempts, order.ShipmentLastAttemptAt)
 	return err
 }
@@ -282,6 +286,33 @@ func (r *PostgresOrderRepository) TransitionStatusWithPayment(id uuid.UUID, from
 // SettlePaid claims the order and reserves stock in one transaction. Either the
 // order ends up paid with every item reserved, or needs_refund with no product
 // touched; a crash can never leave the two halves out of sync.
+// TransitionStatusWithRefund moves an order and records the refund atomically.
+func (r *PostgresOrderRepository) TransitionStatusWithRefund(id uuid.UUID, from, to model.OrderStatus, info model.RefundInfo) (*model.UserOrder, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	refund, err := marshalRefund(&info)
+	if err != nil {
+		return nil, false, err
+	}
+
+	order, err := scanOrder(r.pool.QueryRow(ctx,
+		`UPDATE orders SET status = $3, refund = $4 WHERE id = $1 AND status = $2 RETURNING `+orderColumns,
+		id, from, to, refund))
+	if err == nil {
+		return order, true, nil
+	}
+	if !errors.Is(err, ErrOrderNotFound) {
+		return nil, false, err
+	}
+
+	current, ferr := r.FindByID(id)
+	if ferr != nil {
+		return nil, false, ferr
+	}
+	return current, false, nil
+}
+
 func (r *PostgresOrderRepository) SettlePaid(id uuid.UUID, from model.OrderStatus, info model.PaymentInfo, stock map[int]int, reserveStock bool) (*model.UserOrder, SettleOutcome, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
@@ -408,13 +439,14 @@ func scanOrder(row pgx.Row) (*model.UserOrder, error) {
 		items     []byte
 		payment   []byte
 		shipment  []byte
+		refund    []byte
 		lastRetry *time.Time
 	)
 
 	err := row.Scan(&order.ID, &order.Username, &order.Email, &order.Phone,
 		&address, &items, &order.Total, &order.Status,
 		&order.ShippingCost, &order.Courier, &order.CourierService,
-		&order.SnapToken, &order.PaymentURL, &payment, &shipment, &order.CreatedAt,
+		&order.SnapToken, &order.PaymentURL, &payment, &shipment, &refund, &order.CreatedAt,
 		&order.ShipmentAttempts, &lastRetry)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderNotFound
@@ -441,6 +473,12 @@ func scanOrder(row pgx.Row) (*model.UserOrder, error) {
 			order.Shipment = &info
 		}
 	}
+	if len(refund) > 0 {
+		var info model.RefundInfo
+		if err := json.Unmarshal(refund, &info); err == nil {
+			order.Refund = &info
+		}
+	}
 	if lastRetry != nil {
 		order.ShipmentLastAttemptAt = lastRetry
 	}
@@ -456,6 +494,13 @@ func marshalShipment(info *model.ShipmentInfo) ([]byte, error) {
 }
 
 func marshalPayment(info *model.PaymentInfo) ([]byte, error) {
+	if info == nil {
+		return nil, nil
+	}
+	return json.Marshal(info)
+}
+
+func marshalRefund(info *model.RefundInfo) ([]byte, error) {
 	if info == nil {
 		return nil, nil
 	}

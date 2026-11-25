@@ -251,7 +251,7 @@ already ran locally.
    confirmed instead of expired. If Midtrans is unreachable the order keeps its
    stock and is retried on the next tick, for at most 24 hours.
 
-Statuses: `pending`, `paid`, `expired`, `cancelled`, `needs_refund`.
+Statuses: `pending`, `paid`, `expired`, `cancelled`, `needs_refund`, `refunded`.
 
 ## API surface
 
@@ -281,6 +281,7 @@ Admin, all requiring a session:
 | `DELETE` | `/admin/session` | sign out |
 | `GET` | `/admin/orders`, `/admin/orders/:id` | order list and detail |
 | `POST` | `/admin/orders/:id/shipment` | create the shipment for a paid order whose provider call failed |
+| `POST` | `/admin/orders/:id/refund` | full refund of a `needs_refund` order through Midtrans |
 | `GET` | `/admin/products` | product list, including hidden ones |
 | `PATCH` | `/admin/products/:id` | price, stock, visibility |
 | `DELETE` | `/admin/products/:id` | remove a product |
@@ -410,8 +411,8 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 - Settlement claims the order and reserves stock in one Postgres transaction.
   The in-memory repository used for dev runs the two steps in sequence, so it is
   not crash-atomic; production uses the transactional path.
-- `needs_refund` is a flag, not an integration: refunds are still issued by hand
-  in the Midtrans dashboard. The daily digest lists them so they are not missed.
+- Refunds are issued from the order page and only cover the full amount; partial
+  refunds and automatic refund reconciliation are not implemented.
 - Shipment creation is retried automatically a bounded number of times; after
   that the digest lists the order and the order page offers a manual retry.
   The retry delay is fixed, not exponential.

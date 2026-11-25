@@ -32,10 +32,12 @@ func (f *fakeMailer) Send(msg notification.Message) error {
 }
 
 type fakeGateway struct {
-	chargeErr error
-	status    *payment.StatusResult
-	statusErr error
-	charged   *model.UserOrder
+	chargeErr   error
+	status      *payment.StatusResult
+	statusErr   error
+	charged     *model.UserOrder
+	refundErr   error
+	refundCalls int
 }
 
 type fakeShippingProvider struct {
@@ -90,6 +92,11 @@ func (f *fakeGateway) Charge(order model.UserOrder) (*payment.ChargeResult, erro
 		return nil, f.chargeErr
 	}
 	return &payment.ChargeResult{Token: "fake-token", RedirectURL: "https://example.test/pay"}, nil
+}
+
+func (f *fakeGateway) Refund(orderID string, amount int, reason string) error {
+	f.refundCalls++
+	return f.refundErr
 }
 
 func (f *fakeGateway) CheckStatus(orderID string) (*payment.StatusResult, error) {

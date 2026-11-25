@@ -34,6 +34,9 @@ type OrderRepository interface {
 	FindByID(id uuid.UUID) (*model.UserOrder, error)
 	TransitionStatus(id uuid.UUID, from, to model.OrderStatus) (*model.UserOrder, bool, error)
 	TransitionStatusWithPayment(id uuid.UUID, from, to model.OrderStatus, info model.PaymentInfo) (*model.UserOrder, bool, error)
+	// TransitionStatusWithRefund moves an order to "to" (usually refunded) and
+	// records the refund atomically.
+	TransitionStatusWithRefund(id uuid.UUID, from, to model.OrderStatus, info model.RefundInfo) (*model.UserOrder, bool, error)
 	// SettlePaid claims the order for a confirmed payment. When reserveStock is
 	// true, the stock is reserved in the same unit of work: the order becomes
 	// either paid with all of it reserved, or needs_refund with none of it
@@ -288,6 +291,32 @@ func (r *MemoryOrderRepository) SettlePaid(id uuid.UUID, from model.OrderStatus,
 	}
 
 	return order, SettleClaimed, nil
+}
+
+// TransitionStatusWithRefund moves an order and records the refund atomically.
+func (r *MemoryOrderRepository) TransitionStatusWithRefund(id uuid.UUID, from, to model.OrderStatus, info model.RefundInfo) (*model.UserOrder, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.orders {
+		if r.orders[i].ID != id {
+			continue
+		}
+
+		order := r.orders[i]
+		if order.Status != from {
+			return &order, false, nil
+		}
+
+		r.orders[i].Status = to
+		r.orders[i].Refund = &info
+
+		order.Status = to
+		order.Refund = &info
+		return &order, true, nil
+	}
+
+	return nil, false, ErrOrderNotFound
 }
 
 // SetShipment stores the provider shipment details on the order.

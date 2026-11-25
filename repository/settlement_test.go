@@ -468,3 +468,47 @@ func TestPostgresOrderRepositoryShipmentRetries(t *testing.T) {
 		t.Fatalf("attempts = %d last = %v, want 1 and a timestamp", stored.ShipmentAttempts, stored.ShipmentLastAttemptAt)
 	}
 }
+
+func TestMemoryTransitionStatusWithRefund(t *testing.T) {
+	orders := NewMemoryOrderRepository()
+	order := model.UserOrder{ID: uuid.New(), Status: model.OrderStatusNeedsRefund, Total: 1000}
+	if err := orders.Save(order); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	info := model.RefundInfo{Key: order.ID.String(), Amount: 1000, RefundedAt: time.Now()}
+	updated, ok, err := orders.TransitionStatusWithRefund(order.ID, model.OrderStatusNeedsRefund, model.OrderStatusRefunded, info)
+	if err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	if !ok || updated.Status != model.OrderStatusRefunded || updated.Refund == nil {
+		t.Fatalf("updated = %+v, ok = %v", updated, ok)
+	}
+
+	// A second transition from needs_refund must not apply.
+	if _, ok, err := orders.TransitionStatusWithRefund(order.ID, model.OrderStatusNeedsRefund, model.OrderStatusRefunded, info); err != nil || ok {
+		t.Fatalf("second transition ok = %v, err = %v, want false/nil", ok, err)
+	}
+}
+
+func TestPostgresTransitionStatusWithRefund(t *testing.T) {
+	_, repo := postgresSettleRepo(t)
+	order := seedPostgresOrder(t, repo, model.OrderStatusNeedsRefund, []model.Item{{ID: 1, Qty: 1}}, time.Minute)
+
+	info := model.RefundInfo{Key: order.ID.String(), Amount: 2000, RefundedAt: time.Now()}
+	updated, ok, err := repo.TransitionStatusWithRefund(order.ID, model.OrderStatusNeedsRefund, model.OrderStatusRefunded, info)
+	if err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	if !ok || updated.Status != model.OrderStatusRefunded || updated.Refund == nil || updated.Refund.Amount != 2000 {
+		t.Fatalf("updated = %+v, ok = %v", updated, ok)
+	}
+
+	stored, err := repo.FindByID(order.ID)
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if stored.Status != model.OrderStatusRefunded || stored.Refund == nil || stored.Refund.Amount != 2000 {
+		t.Fatalf("stored = %+v", stored)
+	}
+}
