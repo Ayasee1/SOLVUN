@@ -113,6 +113,62 @@ func (r *PostgresOrderRepository) GetStalePending(before time.Time) ([]model.Use
 	return orders, rows.Err()
 }
 
+// GetNeedsRefund returns orders that were paid but can no longer be fulfilled.
+func (r *PostgresOrderRepository) GetNeedsRefund() ([]model.UserOrder, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+orderColumns+` FROM orders WHERE status = $1 ORDER BY created_at`,
+		string(model.OrderStatusNeedsRefund))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	orders := make([]model.UserOrder, 0)
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, *order)
+	}
+
+	return orders, rows.Err()
+}
+
+// GetPaidWithoutShipment returns paid orders with a courier but no provider
+// shipment created before the cutoff.
+func (r *PostgresOrderRepository) GetPaidWithoutShipment(before time.Time) ([]model.UserOrder, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+orderColumns+` FROM orders
+		 WHERE status = $1
+		   AND courier <> ''
+		   AND COALESCE(shipment->>'provider_id', '') = ''
+		   AND created_at < $2
+		 ORDER BY created_at`,
+		string(model.OrderStatusPaid), before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	orders := make([]model.UserOrder, 0)
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, *order)
+	}
+
+	return orders, rows.Err()
+}
+
 func (r *PostgresOrderRepository) FindByID(id uuid.UUID) (*model.UserOrder, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()

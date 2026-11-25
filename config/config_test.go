@@ -41,6 +41,42 @@ func TestAdminDefaults(t *testing.T) {
 	}
 }
 
+func TestOpsAlertSettings(t *testing.T) {
+	t.Setenv("OPS_EMAIL", "  ops@solvun.test  ")
+	t.Setenv("OPS_ALERT_INTERVAL_HOURS", "6")
+	t.Setenv("OPS_ALERT_GRACE_MINUTES", "5")
+
+	cfg := Load()
+
+	if cfg.OpsEmail != "ops@solvun.test" {
+		t.Fatalf("OpsEmail = %q", cfg.OpsEmail)
+	}
+	if cfg.OpsAlertIntervalHours != 6 {
+		t.Fatalf("OpsAlertIntervalHours = %d", cfg.OpsAlertIntervalHours)
+	}
+	if cfg.OpsAlertGraceMinutes != 5 {
+		t.Fatalf("OpsAlertGraceMinutes = %d", cfg.OpsAlertGraceMinutes)
+	}
+}
+
+func TestOpsAlertDefaults(t *testing.T) {
+	t.Setenv("OPS_EMAIL", "")
+	t.Setenv("OPS_ALERT_INTERVAL_HOURS", "")
+	t.Setenv("OPS_ALERT_GRACE_MINUTES", "")
+
+	cfg := Load()
+
+	if cfg.OpsEmail != "" {
+		t.Fatalf("OpsEmail = %q, want empty (disabled)", cfg.OpsEmail)
+	}
+	if cfg.OpsAlertIntervalHours != 24 {
+		t.Fatalf("OpsAlertIntervalHours = %d, want 24", cfg.OpsAlertIntervalHours)
+	}
+	if cfg.OpsAlertGraceMinutes != 10 {
+		t.Fatalf("OpsAlertGraceMinutes = %d, want 10", cfg.OpsAlertGraceMinutes)
+	}
+}
+
 func TestRateLimitSetting(t *testing.T) {
 	t.Setenv("RATE_LIMIT_ENABLED", "")
 

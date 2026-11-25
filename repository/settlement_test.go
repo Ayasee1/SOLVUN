@@ -288,3 +288,92 @@ func TestPostgresSettlePaidRejectsWrongStatus(t *testing.T) {
 		t.Fatalf("stock = %d, want 10", stock)
 	}
 }
+
+func TestMemoryOrderRepositoryOpsQueries(t *testing.T) {
+	orders := NewMemoryOrderRepository()
+	now := time.Now()
+
+	newOrder := func(status model.OrderStatus, courier string, age time.Duration) model.UserOrder {
+		o := model.UserOrder{
+			ID:        uuid.New(),
+			Status:    status,
+			Courier:   courier,
+			Total:     1000,
+			CreatedAt: now.Add(-age),
+			OrderItem: []model.Item{{ID: 1, Qty: 1}},
+		}
+		if err := orders.Save(o); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+		return o
+	}
+
+	refund := newOrder(model.OrderStatusNeedsRefund, "", time.Hour)
+	unshippedOld := newOrder(model.OrderStatusPaid, "jne", time.Hour)
+	newOrder(model.OrderStatusPaid, "jne", time.Second) // inside the grace period
+	shipped := newOrder(model.OrderStatusPaid, "jne", time.Hour)
+	newOrder(model.OrderStatusPending, "", time.Hour)
+
+	if err := orders.SetShipment(shipped.ID, model.ShipmentInfo{ProviderID: "bite-1"}); err != nil {
+		t.Fatalf("set shipment: %v", err)
+	}
+
+	refunds, err := orders.GetNeedsRefund()
+	if err != nil {
+		t.Fatalf("GetNeedsRefund: %v", err)
+	}
+	if len(refunds) != 1 || refunds[0].ID != refund.ID {
+		t.Fatalf("refunds = %+v, want only %s", refunds, refund.ID)
+	}
+
+	unshipped, err := orders.GetPaidWithoutShipment(now.Add(-10 * time.Minute))
+	if err != nil {
+		t.Fatalf("GetPaidWithoutShipment: %v", err)
+	}
+	if len(unshipped) != 1 || unshipped[0].ID != unshippedOld.ID {
+		t.Fatalf("unshipped = %+v, want only %s", unshipped, unshippedOld.ID)
+	}
+}
+
+func TestPostgresOrderRepositoryOpsQueries(t *testing.T) {
+	_, repo := postgresSettleRepo(t)
+	now := time.Now()
+
+	seed := func(status model.OrderStatus, courier string, age time.Duration, shipment bool) model.UserOrder {
+		order := seedPostgresOrder(t, repo, status, []model.Item{{ID: 1, Qty: 1}}, age)
+		if courier != "" {
+			if _, err := repo.pool.Exec(context.Background(),
+				`UPDATE orders SET courier = $2 WHERE id = $1`, order.ID, courier); err != nil {
+				t.Fatalf("set courier: %v", err)
+			}
+		}
+		if shipment {
+			if err := repo.SetShipment(order.ID, model.ShipmentInfo{ProviderID: "bite-1"}); err != nil {
+				t.Fatalf("set shipment: %v", err)
+			}
+		}
+		return order
+	}
+
+	refund := seed(model.OrderStatusNeedsRefund, "", time.Hour, false)
+	unshippedOld := seed(model.OrderStatusPaid, "jne", time.Hour, false)
+	seed(model.OrderStatusPaid, "jne", time.Second, false) // inside the grace period
+	seed(model.OrderStatusPaid, "jne", time.Hour, true)    // already shipped
+	seed(model.OrderStatusPending, "", time.Hour, false)
+
+	refunds, err := repo.GetNeedsRefund()
+	if err != nil {
+		t.Fatalf("GetNeedsRefund: %v", err)
+	}
+	if len(refunds) != 1 || refunds[0].ID != refund.ID {
+		t.Fatalf("refunds = %+v, want only %s", refunds, refund.ID)
+	}
+
+	unshipped, err := repo.GetPaidWithoutShipment(now.Add(-10 * time.Minute))
+	if err != nil {
+		t.Fatalf("GetPaidWithoutShipment: %v", err)
+	}
+	if len(unshipped) != 1 || unshipped[0].ID != unshippedOld.ID {
+		t.Fatalf("unshipped = %+v, want only %s", unshipped, unshippedOld.ID)
+	}
+}

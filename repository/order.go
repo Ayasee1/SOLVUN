@@ -18,6 +18,12 @@ type OrderRepository interface {
 	// GetStalePending returns pending orders created before the cutoff, used by
 	// the sweeper to expire orders whose payment never completed.
 	GetStalePending(before time.Time) ([]model.UserOrder, error)
+	// GetNeedsRefund returns orders whose payment was captured but can no longer
+	// be fulfilled, so the operator has to refund them.
+	GetNeedsRefund() ([]model.UserOrder, error)
+	// GetPaidWithoutShipment returns paid orders with a courier but no provider
+	// shipment created before the cutoff. The ops digest reports them.
+	GetPaidWithoutShipment(before time.Time) ([]model.UserOrder, error)
 	FindByID(id uuid.UUID) (*model.UserOrder, error)
 	TransitionStatus(id uuid.UUID, from, to model.OrderStatus) (*model.UserOrder, bool, error)
 	TransitionStatusWithPayment(id uuid.UUID, from, to model.OrderStatus, info model.PaymentInfo) (*model.UserOrder, bool, error)
@@ -100,6 +106,42 @@ func (r *MemoryOrderRepository) GetStalePending(before time.Time) ([]model.UserO
 		if order.Status == model.OrderStatusPending && order.CreatedAt.Before(before) {
 			out = append(out, order)
 		}
+	}
+	return out, nil
+}
+
+// GetNeedsRefund returns orders that were paid but cannot be fulfilled.
+func (r *MemoryOrderRepository) GetNeedsRefund() ([]model.UserOrder, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]model.UserOrder, 0)
+	for _, order := range r.orders {
+		if order.Status == model.OrderStatusNeedsRefund {
+			out = append(out, order)
+		}
+	}
+	return out, nil
+}
+
+// GetPaidWithoutShipment returns paid orders that have a courier but no provider
+// shipment, created before the cutoff.
+func (r *MemoryOrderRepository) GetPaidWithoutShipment(before time.Time) ([]model.UserOrder, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]model.UserOrder, 0)
+	for _, order := range r.orders {
+		if order.Status != model.OrderStatusPaid || order.Courier == "" {
+			continue
+		}
+		if order.Shipment != nil && order.Shipment.ProviderID != "" {
+			continue
+		}
+		if !order.CreatedAt.Before(before) {
+			continue
+		}
+		out = append(out, order)
 	}
 	return out, nil
 }

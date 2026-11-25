@@ -330,6 +330,19 @@ Because the cookie is `SameSite=Lax`, the dashboard and the API must be served
 from the same site. Serving both subdomains behind one nginx host (as `deploy/`
 does) satisfies this.
 
+## Operations alerts
+
+Set `OPS_EMAIL` and the API emails a digest of orders that need a human:
+
+- `needs_refund`: the payment was captured but the stock was gone.
+- paid orders that have a courier but no shipment, older than
+  `OPS_ALERT_GRACE_MINUTES` (the settlement path normally creates it right away).
+
+The digest goes out one minute after startup and then every
+`OPS_ALERT_INTERVAL_HOURS`, and only when at least one order is flagged. An empty
+inbox therefore means nothing is waiting. It uses the same sender as customer
+mail, so with no provider configured it is only logged.
+
 ## Configuration
 
 All variables are documented in `.env.example`. The most important ones:
@@ -349,6 +362,9 @@ All variables are documented in `.env.example`. The most important ones:
 | `CORS_ORIGINS` | comma-separated allowed browser origins |
 | `TRUST_PROXY` | read client IP from `X-Forwarded-For` (nginx on host) |
 | `RATE_LIMIT_ENABLED` | per-client limits on public endpoints (default `true`) |
+| `OPS_EMAIL` | recipient for the refund/shipment digest; empty disables it |
+| `OPS_ALERT_INTERVAL_HOURS` | digest interval (default 24) |
+| `OPS_ALERT_GRACE_MINUTES` | ignore paid orders younger than this (default 10) |
 
 ## Deployment
 
@@ -380,9 +396,9 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
   The in-memory repository used for dev runs the two steps in sequence, so it is
   not crash-atomic; production uses the transactional path.
 - `needs_refund` is a flag, not an integration: refunds are still issued by hand
-  in the Midtrans dashboard.
+  in the Midtrans dashboard. The daily digest lists them so they are not missed.
 - A failed shipment can be retried from the order page, but there is no
-  background retry, so someone has to notice the button.
+  background retry loop; the digest lists orders that are stuck.
 - Admin lists load every row. Orders accept a `?status=` filter, but there is no
   pagination anywhere and the product list is filtered in the browser.
 - `GET /orders/:id` is a capability URL: anyone holding the link can read the
