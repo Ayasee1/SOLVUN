@@ -25,6 +25,27 @@ deploy/nginx/snippets/security-admin.conf     # headers + CSP for the dashboard
 include the security snippet again. The config already does this for
 `/index.html`; keep that in mind when adding locations.
 
+## Validate before deploying
+
+```bash
+bash deploy/nginx/test.sh
+```
+
+The script needs docker and does two things:
+
+1. `nginx -t` on the untouched config with dummy certificates, so TLS
+   directives and every `include` are checked.
+2. Starts a plain-HTTP copy with a mock upstream and asserts the routing: `/api`
+   prefix stripping, `/order` `/orders` `/track` passthrough, the SPA fallback,
+   cache headers, and that the storefront cannot reach `/api/admin/*`.
+
+CI runs the same script, so a config change cannot land untested. To check the
+version the VPS actually runs:
+
+```bash
+NGINX_IMAGE=nginx:1.27-alpine bash deploy/nginx/test.sh
+```
+
 ## 1. DNS
 
 Point both names at the server before requesting certificates:

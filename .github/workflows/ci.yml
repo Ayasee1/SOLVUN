@@ -166,10 +166,23 @@ jobs:
       - name: Run browser tests
         run: bun run test
 
+  nginx:
+    name: Nginx config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Runs `nginx -t` with dummy certificates, then starts nginx with a mock
+      # upstream and asserts the proxy/SPA routing rules.
+      - name: Validate config and routing
+        run: bash deploy/nginx/test.sh
+
   ci:
     name: CI
     if: always()
-    needs: [backend, storefront, admin, admin-tests]
+    needs: [backend, storefront, admin, admin-tests, nginx]
     runs-on: ubuntu-latest
     steps:
       - name: Check job results
@@ -178,6 +191,7 @@ jobs:
           echo "storefront:   ${{ needs.storefront.result }}"
           echo "admin:        ${{ needs.admin.result }}"
           echo "admin-tests:  ${{ needs.admin-tests.result }}"
+          echo "nginx:        ${{ needs.nginx.result }}"
 
           if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
             echo "One or more jobs failed."
