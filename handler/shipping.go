@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"log"
 
 	"github.com/gofiber/fiber/v2"
@@ -45,6 +46,11 @@ func (h *ShippingHandler) Rates(c *fiber.Ctx) error {
 			"error": "Items are required",
 		})
 	}
+	if len(req.Items) > maxOrderLines {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fmt.Sprintf("Too many cart lines (max %d)", maxOrderLines),
+		})
+	}
 	if req.DestinationPostalCode == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Destination postal code is required",
@@ -54,9 +60,9 @@ func (h *ShippingHandler) Rates(c *fiber.Ctx) error {
 	weight := 0
 	items := make([]shipping.ShipmentItem, 0, len(req.Items))
 	for _, item := range req.Items {
-		if item.Qty <= 0 {
+		if item.Qty <= 0 || item.Qty > maxItemQty {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "Item quantity must be greater than zero",
+				"error": fmt.Sprintf("Item quantity must be between 1 and %d", maxItemQty),
 			})
 		}
 

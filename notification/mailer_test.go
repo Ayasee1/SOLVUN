@@ -22,6 +22,21 @@ func TestBuildMIMEWithoutAttachment(t *testing.T) {
 	}
 }
 
+func TestBuildMIMEFlattensHeaderInjection(t *testing.T) {
+	sender := SMTPSender{From: "store@solvun.test"}
+	raw := string(sender.buildMIME(Message{
+		To:      "victim@example.com\r\nBcc: attacker@example.com",
+		Subject: "Order received\r\nX-Injected: yes",
+		HTML:    "<p>hello</p>",
+	}))
+
+	for _, injected := range []string{"\r\nBcc:", "\r\nX-Injected:"} {
+		if strings.Contains(raw, injected) {
+			t.Fatalf("header injection survived (%q):\n%s", injected, raw)
+		}
+	}
+}
+
 func TestBuildMIMEWithAttachment(t *testing.T) {
 	sender := SMTPSender{From: "Store <no-reply@test.local>"}
 	data := []byte("%PDF-1.4 fake invoice")

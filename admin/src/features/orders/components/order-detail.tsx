@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowLeft, Download } from 'lucide-react'
+import { ArrowLeft, Download, PackageCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { queryWithToast } from '@/lib/query'
 import { Badge } from '@/components/ui/badge'
@@ -23,7 +23,7 @@ import { Main } from '@/components/layout/main'
 import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
-import { cancelOrder, fetchOrder } from '../api'
+import { cancelOrder, fetchOrder, retryShipment } from '../api'
 import { orderStatusClass, paymentMethodLabel } from '../data/status'
 
 const rupiah = new Intl.NumberFormat('id-ID', {
@@ -45,6 +45,7 @@ function formatDate(value: string) {
 
 export function OrderDetail({ orderId }: { orderId: string }) {
   const [cancelling, setCancelling] = useState(false)
+  const [shipping, setShipping] = useState(false)
   const orderQuery = useQuery({
     queryKey: ['orders', orderId],
     queryFn: () => queryWithToast(() => fetchOrder(orderId)),
@@ -65,6 +66,22 @@ export function OrderDetail({ orderId }: { orderId: string }) {
       toast.error(error instanceof Error ? error.message : 'Cancel failed')
     } finally {
       setCancelling(false)
+    }
+  }
+
+  async function onCreateShipment() {
+    if (!order) return
+    setShipping(true)
+    try {
+      await retryShipment(order.id)
+      toast.success('Shipment created')
+      void orderQuery.refetch()
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Could not create shipment'
+      )
+    } finally {
+      setShipping(false)
     }
   }
 
@@ -114,6 +131,16 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                   Invoice
                 </a>
               </Button>
+              {order.status === 'paid' && !order.shipment?.provider_id && (
+                <Button
+                  variant='outline'
+                  disabled={shipping}
+                  onClick={() => void onCreateShipment()}
+                >
+                  <PackageCheck className='size-4' />
+                  {shipping ? 'Creating...' : 'Create shipment'}
+                </Button>
+              )}
               {order.status === 'pending' && (
                 <Button
                   variant='outline'

@@ -3,10 +3,23 @@
 // and email so providers can be swapped without touching handlers.
 package shipping
 
-import "errors"
+import (
+	"errors"
+	"regexp"
+)
 
 // ErrNotConfigured is returned when no shipping provider is configured.
 var ErrNotConfigured = errors.New("shipping provider is not configured")
+
+// providerIDPattern is the shape of an id a provider may issue. It is also what
+// keeps webhook-supplied ids from being interpolated into a URL path as
+// traversal or query syntax.
+var providerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+
+// ValidProviderID reports whether id is safe to use in a provider URL.
+func ValidProviderID(id string) bool {
+	return providerIDPattern.MatchString(id)
+}
 
 // Origin describes the store warehouse used as the shipment origin.
 type Origin struct {

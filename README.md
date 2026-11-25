@@ -229,9 +229,14 @@ already ran locally.
 ## Order lifecycle
 
 1. `POST /orders` validates the cart, recomputes prices and shipping from the
-   server, reserves stock, and creates a Midtrans Snap transaction.
-2. Midtrans calls `POST /orders/notification`; the API re-reads the transaction
-   status from Midtrans and marks the order `paid`.
+   server, reserves stock, and creates a Midtrans Snap transaction. Carts are
+   capped at 50 lines with quantities between 1 and 100, so one request cannot
+   fan out into thousands of catalog lookups.
+2. Midtrans calls `POST /orders/notification`. The API verifies the
+   `signature_key` when `MIDTRANS_SERVER_KEY` is set, re-reads the transaction
+   from Midtrans, checks the amount, then claims the order before touching
+   stock. The claim is a compare-and-set, so duplicate notifications and a
+   sweeper expiring the order at the same moment cannot both win.
 3. A paid order creates a shipment through the configured shipping provider.
 4. Unpaid orders are expired by the sweeper after `ORDER_PENDING_TTL_MINUTES`
    and their stock is released.
@@ -265,6 +270,7 @@ Admin, all requiring a session:
 | `GET` | `/admin/session` | session status |
 | `DELETE` | `/admin/session` | sign out |
 | `GET` | `/admin/orders`, `/admin/orders/:id` | order list and detail |
+| `POST` | `/admin/orders/:id/shipment` | create the shipment for a paid order whose provider call failed |
 | `GET` | `/admin/products` | product list, including hidden ones |
 | `PATCH` | `/admin/products/:id` | price, stock, visibility |
 | `DELETE` | `/admin/products/:id` | remove a product |
@@ -359,9 +365,17 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 
 - Admin sessions live in memory: a restart signs the operator out, and running
   more than one API instance would need a shared session store.
-- Webhook handlers do not verify the provider signature before calling out to
-  Midtrans or Biteship, so forged notifications still cost outbound requests.
-  The rate limit caps the volume, not the trust.
+- Webhook handlers do not verify a provider signature on the shipping side:
+  Biteship does not sign its calls, so the endpoint relies on re-reading the
+  provider state plus the rate limit. A shared secret in the webhook URL would
+  add a real gate.
+- Settlement claims the order and then reserves stock as two writes, not one DB
+  transaction. A crash between them leaves a paid order whose stock was not
+  re-reserved; the window is small but real.
+- `needs_refund` is a flag, not an integration: refunds are still issued by hand
+  in the Midtrans dashboard.
+- A failed shipment can be retried from the order page, but there is no
+  background retry, so someone has to notice the button.
 - Admin lists load every row. Orders accept a `?status=` filter, but there is no
   pagination anywhere and the product list is filtered in the browser.
 - `GET /orders/:id` is a capability URL: anyone holding the link can read the

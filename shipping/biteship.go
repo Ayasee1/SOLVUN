@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -69,6 +70,10 @@ func (b *Biteship) Rates(req RateRequest) ([]Rate, error) {
 	}
 	if draft.ID == "" {
 		return nil, fmt.Errorf("biteship draft order: %s", draft.ErrorMessage)
+	}
+	// The draft id is ours to use in two more URLs; make sure it is a plain id.
+	if !ValidProviderID(draft.ID) {
+		return nil, fmt.Errorf("biteship draft order: unexpected id")
 	}
 
 	// the draft exists only to price the shipment; delete it either way
@@ -186,6 +191,11 @@ func (b *Biteship) CreateShipment(req ShipmentRequest) (*Shipment, error) {
 // Tracking reads the current state of a Biteship order, which is the trusted
 // source for shipment status (webhook payloads are never trusted directly).
 func (b *Biteship) Tracking(providerOrderID string) (*Shipment, error) {
+	// The id arrives from a webhook, so never interpolate it unchecked.
+	if !ValidProviderID(providerOrderID) {
+		return nil, fmt.Errorf("biteship: invalid order id")
+	}
+
 	var payload struct {
 		Success bool   `json:"success"`
 		ID      string `json:"id"`
@@ -200,7 +210,7 @@ func (b *Biteship) Tracking(providerOrderID string) (*Shipment, error) {
 			} `json:"history"`
 		} `json:"courier"`
 	}
-	if err := b.do(http.MethodGet, "/v1/orders/"+providerOrderID, nil, &payload); err != nil {
+	if err := b.do(http.MethodGet, "/v1/orders/"+url.PathEscape(providerOrderID), nil, &payload); err != nil {
 		return nil, err
 	}
 
