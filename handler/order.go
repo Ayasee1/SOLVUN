@@ -875,6 +875,25 @@ func (h *OrderHandler) expireOrder(id uuid.UUID) {
 	if err := h.productRepo.ReleaseStock(requestedItems(order)); err != nil {
 		log.Printf("failed to release stock for expired order %s: %v", id, err)
 	}
+
+	// Close the payment window too, otherwise the customer can still pay an
+	// order we already expired and the money becomes a refund case.
+	h.expirePayment(id)
+}
+
+// expirePayment closes the provider payment window. Failures are logged: the
+// order is already cancelled/expired, and a late payment still lands in the
+// needs_refund safety net.
+func (h *OrderHandler) expirePayment(id uuid.UUID) {
+	if err := h.gateway.Expire(id.String()); err != nil {
+		log.Printf("could not expire payment for order %s: %v", id, err)
+	}
+}
+
+// ExpirePayment lets the sweeper close the provider payment window for an order
+// it just expired.
+func (h *OrderHandler) ExpirePayment(id uuid.UUID) {
+	h.expirePayment(id)
 }
 
 // GetOrders lists orders (admin), optionally filtered by ?status=
@@ -953,6 +972,9 @@ func (h *OrderHandler) CancelOrder(c *fiber.Ctx) error {
 	if err := h.productRepo.ReleaseStock(requested); err != nil {
 		log.Printf("failed to release stock for cancelled order %s: %v", order.ID, err)
 	}
+
+	// Stop the customer from paying an order they just cancelled.
+	h.expirePayment(order.ID)
 
 	return c.JSON(order)
 }

@@ -66,14 +66,19 @@ func statusOf(t *testing.T, orders *repository.MemoryOrderRepository, id uuid.UU
 }
 
 type fakeReconciler struct {
-	settled  bool
-	verified bool
-	calls    int
+	settled     bool
+	verified    bool
+	calls       int
+	expireCalls int
 }
 
 func (f *fakeReconciler) ReconcilePending(model.UserOrder) (bool, bool) {
 	f.calls++
 	return f.settled, f.verified
+}
+
+func (f *fakeReconciler) ExpirePayment(uuid.UUID) {
+	f.expireCalls++
 }
 
 func TestSweepExpiresStaleOrderAndReleasesStock(t *testing.T) {
@@ -169,5 +174,23 @@ func TestSweepExpiresUnverifiedOrderAfterHardLimit(t *testing.T) {
 	}
 	if got := stockOf(t, products); got != initialStock {
 		t.Fatalf("stock = %d, want %d (released)", got, initialStock)
+	}
+}
+
+func TestSweepClosesThePaymentWindow(t *testing.T) {
+	products, orders, order, initialStock := seedPendingOrder(t, time.Hour)
+
+	reconciler := &fakeReconciler{settled: false, verified: true}
+	s := New(orders, products, reconciler, 30*time.Minute, time.Minute)
+	s.Sweep(context.Background())
+
+	if got := statusOf(t, orders, order.ID); got != model.OrderStatusExpired {
+		t.Fatalf("status = %q, want expired", got)
+	}
+	if got := stockOf(t, products); got != initialStock {
+		t.Fatalf("stock = %d, want %d", got, initialStock)
+	}
+	if reconciler.expireCalls != 1 {
+		t.Fatalf("expire calls = %d, want 1", reconciler.expireCalls)
 	}
 }

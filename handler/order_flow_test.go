@@ -43,6 +43,8 @@ type countingGateway struct {
 	statusErr   error
 	refundCalls int
 	refundErr   error
+	expireCalls int
+	expireErr   error
 }
 
 func (g *countingGateway) Charge(model.UserOrder) (*payment.ChargeResult, error) {
@@ -76,10 +78,23 @@ func (g *countingGateway) calls() int {
 	return g.statusCalls
 }
 
+func (g *countingGateway) Expire(string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.expireCalls++
+	return g.expireErr
+}
+
 func (g *countingGateway) refunds() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.refundCalls
+}
+
+func (g *countingGateway) expires() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.expireCalls
 }
 
 func newFlowApp(t *testing.T, products repository.ProductRepository, orders repository.OrderRepository, serverKey string) *flowApp {
@@ -799,6 +814,86 @@ func TestFlowRefundRejectsOrderThatDoesNotNeedIt(t *testing.T) {
 	}
 	if got := flow.gateway.refunds(); got != 0 {
 		t.Fatalf("gateway refund calls = %d, want 0", got)
+	}
+}
+
+// Case 12: cancelling an order closes the Midtrans payment window, so the
+// customer cannot pay an order they just cancelled.
+func TestFlowCancelExpiresPayment(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 2}))
+
+	req, _ := http.NewRequest(http.MethodPost, "/orders/"+created.ID.String()+"/cancel", nil)
+	resp, err := flow.app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("cancel: %v / %d", err, resp.StatusCode)
+	}
+
+	if got := flow.gateway.expires(); got != 1 {
+		t.Fatalf("gateway expire calls = %d, want 1", got)
+	}
+	stored, err := flow.orders.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+	if stored.Status != model.OrderStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", stored.Status)
+	}
+	if stock := stockOf(t, flow.app, 1); stock != 10 {
+		t.Fatalf("stock = %d, want 10 (released)", stock)
+	}
+}
+
+// A provider that refuses to expire the transaction must not block the cancel.
+func TestFlowCancelWorksWhenExpireFails(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+	flow.gateway.expireErr = errors.New("transaction already settled")
+
+	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 2}))
+	req, _ := http.NewRequest(http.MethodPost, "/orders/"+created.ID.String()+"/cancel", nil)
+	resp, err := flow.app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("cancel: %v / %d", err, resp.StatusCode)
+	}
+
+	stored, _ := flow.orders.FindByID(created.ID)
+	if stored.Status != model.OrderStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", stored.Status)
+	}
+	if stock := stockOf(t, flow.app, 1); stock != 10 {
+		t.Fatalf("stock = %d, want 10", stock)
+	}
+	if got := flow.gateway.expires(); got != 1 {
+		t.Fatalf("gateway expire calls = %d, want 1", got)
+	}
+}
+
+// Midtrans reporting "expire" for a pending order releases stock and closes the
+// payment window.
+func TestFlowReconcileExpireClosesPayment(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 2}))
+
+	flow.gateway.status = &payment.StatusResult{TransactionStatus: "expire"}
+	stored, err := flow.orders.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+
+	settled, verified := flow.orderHandler.ReconcilePending(*stored)
+	if !settled || !verified {
+		t.Fatalf("settled=%v verified=%v, want true/true", settled, verified)
+	}
+
+	after, _ := flow.orders.FindByID(created.ID)
+	if after.Status != model.OrderStatusExpired {
+		t.Fatalf("status = %q, want expired", after.Status)
+	}
+	if stock := stockOf(t, flow.app, 1); stock != 10 {
+		t.Fatalf("stock = %d, want 10", stock)
+	}
+	if got := flow.gateway.expires(); got != 1 {
+		t.Fatalf("gateway expire calls = %d, want 1", got)
 	}
 }
 

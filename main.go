@@ -59,6 +59,14 @@ func main() {
 
 	cfg := config.Load()
 
+	if cfg.PaymentWindowExceedsOrderTTL() {
+		expiry := cfg.MidtransExpiryMinutes
+		if expiry <= 0 {
+			expiry = 24 * 60
+		}
+		log.Printf("warning: the Midtrans payment window is %d minutes but ORDER_PENDING_TTL_MINUTES is %d; customers can pay after the order expires. Lower MIDTRANS_EXPIRY_MINUTES or raise the TTL.", expiry, cfg.OrderPendingTTLMinutes)
+	}
+
 	var productRepo repository.ProductRepository
 	var orderRepo repository.OrderRepository
 

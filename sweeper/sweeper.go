@@ -7,6 +7,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
+
 	"golearn/model"
 	"golearn/repository"
 )
@@ -30,6 +32,9 @@ type Reconciler interface {
 	// order must not be expired) and verified=false when the provider could not
 	// be reached.
 	ReconcilePending(order model.UserOrder) (settled bool, verified bool)
+	// ExpirePayment closes the provider payment window for an order the sweeper
+	// just expired, so it cannot be paid afterwards.
+	ExpirePayment(id uuid.UUID)
 }
 
 // Sweeper periodically expires stale pending orders.
@@ -135,9 +140,13 @@ func (s *Sweeper) Sweep(ctx context.Context) {
 
 		if err := s.products.ReleaseStock(requested); err != nil {
 			log.Printf("order sweeper: release stock for %s: %v", order.ID, err)
-			continue
+		} else {
+			log.Printf("order sweeper: expired order %s and released stock", order.ID)
 		}
 
-		log.Printf("order sweeper: expired order %s and released stock", order.ID)
+		// Stop the customer from paying an order that is already expired.
+		if s.reconciler != nil {
+			s.reconciler.ExpirePayment(order.ID)
+		}
 	}
 }

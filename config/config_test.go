@@ -149,3 +149,27 @@ func TestTrustProxy(t *testing.T) {
 		}
 	}
 }
+
+func TestPaymentWindowGuard(t *testing.T) {
+	cases := []struct {
+		name   string
+		expiry int
+		ttl    int
+		want   bool
+	}{
+		{"shorter window", 15, 20, false},
+		{"equal", 20, 20, false},
+		{"default 24h window", 0, 20, true},
+		{"longer window", 30, 20, true},
+		{"24h window with 24h ttl", 0, 24 * 60, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{MidtransExpiryMinutes: tc.expiry, OrderPendingTTLMinutes: tc.ttl}
+			if got := cfg.PaymentWindowExceedsOrderTTL(); got != tc.want {
+				t.Fatalf("PaymentWindowExceedsOrderTTL() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
