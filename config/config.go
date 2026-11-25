@@ -62,6 +62,14 @@ type Config struct {
 	// RateLimitEnabled blocks a client that floods a public endpoint. Limits
 	// are per client and per route; see routes.SetupRoutes.
 	RateLimitEnabled bool
+	// OpsEmail receives the periodic digest of orders that need a human
+	// (refunds to issue, paid orders without a shipment). Empty disables it.
+	OpsEmail string
+	// OpsAlertIntervalHours is how often the digest is sent (default 24).
+	OpsAlertIntervalHours int
+	// OpsAlertGraceMinutes keeps brand-new paid orders out of the digest while
+	// the normal settlement path is still creating their shipment (default 10).
+	OpsAlertGraceMinutes int
 }
 
 // Load reads configuration from the environment, falling back to safe defaults.
@@ -84,6 +92,10 @@ func Load() Config {
 		AdminCookieSecure:      getEnvBool("ADMIN_COOKIE_SECURE", true),
 		TrustProxy:             getEnvBool("TRUST_PROXY", false),
 		RateLimitEnabled:       getEnvBool("RATE_LIMIT_ENABLED", true),
+
+		OpsEmail:              strings.TrimSpace(os.Getenv("OPS_EMAIL")),
+		OpsAlertIntervalHours: getEnvInt("OPS_ALERT_INTERVAL_HOURS", 24),
+		OpsAlertGraceMinutes:  getEnvInt("OPS_ALERT_GRACE_MINUTES", 10),
 
 		ResendAPIKey: os.Getenv("RESEND_API_KEY"),
 		SMTPHost:     os.Getenv("SMTP_HOST"),

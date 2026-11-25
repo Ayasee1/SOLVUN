@@ -21,6 +21,8 @@ import (
 	"github.com/joho/godotenv"
 	// catalog
 	"golearn/catalog"
+	// alerts
+	"golearn/alerts"
 	// config
 	"golearn/config"
 	// db
@@ -144,6 +146,17 @@ func main() {
 		time.Duration(cfg.OrderPendingTTLMinutes)*time.Minute,
 		time.Duration(cfg.OrderSweepIntervalSeconds)*time.Second)
 	go orderSweeper.Run(ctx)
+
+	// Email a digest of orders that need a human: refunds to issue and paid
+	// orders whose shipment was never created. Silence means everything is fine.
+	if cfg.OpsEmail != "" {
+		notifier := alerts.New(orderRepo, mailer, cfg.OpsEmail,
+			time.Duration(cfg.OpsAlertIntervalHours)*time.Hour,
+			time.Duration(cfg.OpsAlertGraceMinutes)*time.Minute)
+		go notifier.Run(ctx)
+	} else {
+		log.Println("ops alerts disabled: set OPS_EMAIL to receive the refund/shipment digest")
+	}
 
 	// Create a new Fiber instance
 	fiberConfig := fiber.Config{}
