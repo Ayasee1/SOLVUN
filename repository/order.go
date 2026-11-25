@@ -24,6 +24,13 @@ type OrderRepository interface {
 	// GetPaidWithoutShipment returns paid orders with a courier but no provider
 	// shipment created before the cutoff. The ops digest reports them.
 	GetPaidWithoutShipment(before time.Time) ([]model.UserOrder, error)
+	// GetShipmentRetries returns paid orders with a courier and no provider
+	// shipment whose last automatic attempt is old enough and that still have
+	// attempts left.
+	GetShipmentRetries(attemptedBefore time.Time, maxAttempts int) ([]model.UserOrder, error)
+	// RecordShipmentAttempt counts one automatic shipment attempt against the
+	// order, so a persistent failure cannot be retried forever.
+	RecordShipmentAttempt(id uuid.UUID) error
 	FindByID(id uuid.UUID) (*model.UserOrder, error)
 	TransitionStatus(id uuid.UUID, from, to model.OrderStatus) (*model.UserOrder, bool, error)
 	TransitionStatusWithPayment(id uuid.UUID, from, to model.OrderStatus, info model.PaymentInfo) (*model.UserOrder, bool, error)
@@ -144,6 +151,48 @@ func (r *MemoryOrderRepository) GetPaidWithoutShipment(before time.Time) ([]mode
 		out = append(out, order)
 	}
 	return out, nil
+}
+
+// GetShipmentRetries returns paid orders that still need a provider shipment
+// and are due for another automatic attempt.
+func (r *MemoryOrderRepository) GetShipmentRetries(attemptedBefore time.Time, maxAttempts int) ([]model.UserOrder, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]model.UserOrder, 0)
+	for _, order := range r.orders {
+		if order.Status != model.OrderStatusPaid || order.Courier == "" {
+			continue
+		}
+		if order.Shipment != nil && order.Shipment.ProviderID != "" {
+			continue
+		}
+		if order.ShipmentAttempts >= maxAttempts {
+			continue
+		}
+		if order.ShipmentLastAttemptAt != nil && order.ShipmentLastAttemptAt.After(attemptedBefore) {
+			continue
+		}
+		out = append(out, order)
+	}
+	return out, nil
+}
+
+// RecordShipmentAttempt counts one automatic attempt against the order.
+func (r *MemoryOrderRepository) RecordShipmentAttempt(id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.orders {
+		if r.orders[i].ID != id {
+			continue
+		}
+		now := time.Now()
+		r.orders[i].ShipmentAttempts++
+		r.orders[i].ShipmentLastAttemptAt = &now
+		return nil
+	}
+	return ErrOrderNotFound
 }
 
 func (r *MemoryOrderRepository) FindByID(id uuid.UUID) (*model.UserOrder, error) {

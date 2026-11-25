@@ -377,3 +377,94 @@ func TestPostgresOrderRepositoryOpsQueries(t *testing.T) {
 		t.Fatalf("unshipped = %+v, want only %s", unshipped, unshippedOld.ID)
 	}
 }
+
+func TestMemoryOrderRepositoryShipmentRetries(t *testing.T) {
+	orders := NewMemoryOrderRepository()
+	now := time.Now()
+
+	due := model.UserOrder{ID: uuid.New(), Status: model.OrderStatusPaid, Courier: "jne", CreatedAt: now.Add(-time.Hour)}
+	tooMany := model.UserOrder{ID: uuid.New(), Status: model.OrderStatusPaid, Courier: "jne", CreatedAt: now.Add(-time.Hour), ShipmentAttempts: 5}
+	recent := model.UserOrder{ID: uuid.New(), Status: model.OrderStatusPaid, Courier: "jne", CreatedAt: now.Add(-time.Hour), ShipmentLastAttemptAt: &now}
+	shipped := model.UserOrder{ID: uuid.New(), Status: model.OrderStatusPaid, Courier: "jne", CreatedAt: now.Add(-time.Hour)}
+	pending := model.UserOrder{ID: uuid.New(), Status: model.OrderStatusPending, Courier: "jne", CreatedAt: now.Add(-time.Hour)}
+
+	for _, order := range []model.UserOrder{due, tooMany, recent, shipped, pending} {
+		if err := orders.Save(order); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+	}
+	if err := orders.SetShipment(shipped.ID, model.ShipmentInfo{ProviderID: "bite-1"}); err != nil {
+		t.Fatalf("set shipment: %v", err)
+	}
+
+	retries, err := orders.GetShipmentRetries(now.Add(-10*time.Minute), 5)
+	if err != nil {
+		t.Fatalf("GetShipmentRetries: %v", err)
+	}
+	if len(retries) != 1 || retries[0].ID != due.ID {
+		t.Fatalf("retries = %+v, want only %s", retries, due.ID)
+	}
+
+	if err := orders.RecordShipmentAttempt(due.ID); err != nil {
+		t.Fatalf("record attempt: %v", err)
+	}
+	stored, err := orders.FindByID(due.ID)
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if stored.ShipmentAttempts != 1 || stored.ShipmentLastAttemptAt == nil {
+		t.Fatalf("attempts = %d last = %v, want 1 and a timestamp", stored.ShipmentAttempts, stored.ShipmentLastAttemptAt)
+	}
+
+	// The attempt just recorded puts the order into backoff.
+	retries, err = orders.GetShipmentRetries(now.Add(-10*time.Minute), 5)
+	if err != nil {
+		t.Fatalf("GetShipmentRetries: %v", err)
+	}
+	if len(retries) != 0 {
+		t.Fatalf("retries = %d, want 0 while in backoff", len(retries))
+	}
+}
+
+func TestPostgresOrderRepositoryShipmentRetries(t *testing.T) {
+	pool, repo := postgresSettleRepo(t)
+	now := time.Now()
+
+	seed := func(status model.OrderStatus, courier string, attempts int, lastAttempt *time.Time) model.UserOrder {
+		order := seedPostgresOrder(t, repo, status, []model.Item{{ID: 1, Qty: 1}}, time.Hour)
+		if _, err := pool.Exec(context.Background(),
+			`UPDATE orders SET courier = $2, shipment_attempts = $3, shipment_last_attempt_at = $4 WHERE id = $1`,
+			order.ID, courier, attempts, lastAttempt); err != nil {
+			t.Fatalf("seed order: %v", err)
+		}
+		return order
+	}
+
+	due := seed(model.OrderStatusPaid, "jne", 0, nil)
+	seed(model.OrderStatusPaid, "jne", 5, nil)  // attempts exhausted
+	seed(model.OrderStatusPaid, "jne", 0, &now) // in backoff
+	shipped := seed(model.OrderStatusPaid, "jne", 0, nil)
+	seed(model.OrderStatusPending, "jne", 0, nil) // not paid
+	if err := repo.SetShipment(shipped.ID, model.ShipmentInfo{ProviderID: "bite-1"}); err != nil {
+		t.Fatalf("set shipment: %v", err)
+	}
+
+	retries, err := repo.GetShipmentRetries(now.Add(-10*time.Minute), 5)
+	if err != nil {
+		t.Fatalf("GetShipmentRetries: %v", err)
+	}
+	if len(retries) != 1 || retries[0].ID != due.ID {
+		t.Fatalf("retries = %+v, want only %s", retries, due.ID)
+	}
+
+	if err := repo.RecordShipmentAttempt(due.ID); err != nil {
+		t.Fatalf("record attempt: %v", err)
+	}
+	stored, err := repo.FindByID(due.ID)
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if stored.ShipmentAttempts != 1 || stored.ShipmentLastAttemptAt == nil {
+		t.Fatalf("attempts = %d last = %v, want 1 and a timestamp", stored.ShipmentAttempts, stored.ShipmentLastAttemptAt)
+	}
+}

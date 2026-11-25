@@ -39,6 +39,8 @@ import (
 	"golearn/repository"
 	// routes
 	"golearn/routes"
+	// retrier
+	"golearn/retrier"
 	// session
 	"golearn/session"
 	// shipping
@@ -156,6 +158,17 @@ func main() {
 		go notifier.Run(ctx)
 	} else {
 		log.Println("ops alerts disabled: set OPS_EMAIL to receive the refund/shipment digest")
+	}
+
+	// Retry shipment creation for paid orders whose provider call failed, a
+	// bounded number of times. After that the ops digest reports them.
+	if cfg.ShipmentRetryEnabled {
+		shipmentRetrier := retrier.New(orderRepo, orderHandler,
+			cfg.ShipmentRetryMaxAttempts,
+			time.Duration(cfg.ShipmentRetryIntervalMinutes)*time.Minute)
+		go shipmentRetrier.Run(ctx)
+	} else {
+		log.Println("shipment retrier disabled")
 	}
 
 	// Create a new Fiber instance

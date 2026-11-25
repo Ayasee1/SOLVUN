@@ -167,5 +167,9 @@ type UserOrder struct {
 	PaymentURL     string        `json:"payment_url,omitempty"`
 	Payment        *PaymentInfo  `json:"payment,omitempty"`
 	Shipment       *ShipmentInfo `json:"shipment,omitempty"`
-	CreatedAt      time.Time     `json:"created_at"`
+	// ShipmentAttempts counts how many times the API tried to create the provider
+	// shipment automatically, so a broken order cannot be retried forever.
+	ShipmentAttempts      int        `json:"shipment_attempts,omitempty"`
+	ShipmentLastAttemptAt *time.Time `json:"shipment_last_attempt_at,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
 }

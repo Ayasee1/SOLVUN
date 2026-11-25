@@ -26,7 +26,7 @@ func NewPostgresOrderRepository(pool *pgxpool.Pool) *PostgresOrderRepository {
 	return &PostgresOrderRepository{pool: pool}
 }
 
-const orderColumns = `id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, created_at`
+const orderColumns = `id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, created_at, shipment_attempts, shipment_last_attempt_at`
 
 func (r *PostgresOrderRepository) Save(order model.UserOrder) error {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
@@ -55,11 +55,12 @@ func (r *PostgresOrderRepository) Save(order model.UserOrder) error {
 	}
 
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO orders (id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		INSERT INTO orders (id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, created_at, shipment_attempts, shipment_last_attempt_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		order.ID, order.Username, order.Email, order.Phone, address, items,
 		order.Total, order.Status, order.ShippingCost, order.Courier, order.CourierService,
-		order.SnapToken, order.PaymentURL, payment, shipment, createdAt)
+		order.SnapToken, order.PaymentURL, payment, shipment, createdAt,
+		order.ShipmentAttempts, order.ShipmentLastAttemptAt)
 	return err
 }
 
@@ -167,6 +168,56 @@ func (r *PostgresOrderRepository) GetPaidWithoutShipment(before time.Time) ([]mo
 	}
 
 	return orders, rows.Err()
+}
+
+// GetShipmentRetries returns paid orders that still need a provider shipment
+// and are due for another automatic attempt.
+func (r *PostgresOrderRepository) GetShipmentRetries(attemptedBefore time.Time, maxAttempts int) ([]model.UserOrder, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+orderColumns+` FROM orders
+		 WHERE status = $1
+		   AND courier <> ''
+		   AND COALESCE(shipment->>'provider_id', '') = ''
+		   AND shipment_attempts < $2
+		   AND (shipment_last_attempt_at IS NULL OR shipment_last_attempt_at < $3)
+		 ORDER BY created_at
+		 LIMIT 50`,
+		string(model.OrderStatusPaid), maxAttempts, attemptedBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	orders := make([]model.UserOrder, 0)
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, *order)
+	}
+
+	return orders, rows.Err()
+}
+
+// RecordShipmentAttempt counts one automatic shipment attempt against the order.
+func (r *PostgresOrderRepository) RecordShipmentAttempt(id uuid.UUID) error {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE orders SET shipment_attempts = shipment_attempts + 1, shipment_last_attempt_at = now() WHERE id = $1`,
+		id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrOrderNotFound
+	}
+	return nil
 }
 
 func (r *PostgresOrderRepository) FindByID(id uuid.UUID) (*model.UserOrder, error) {
@@ -352,17 +403,19 @@ func (r *PostgresOrderRepository) Delete(id uuid.UUID) (model.UserOrder, error) 
 // scanOrder works for both pgx.Row and pgx.Rows.
 func scanOrder(row pgx.Row) (*model.UserOrder, error) {
 	var (
-		order    model.UserOrder
-		address  []byte
-		items    []byte
-		payment  []byte
-		shipment []byte
+		order     model.UserOrder
+		address   []byte
+		items     []byte
+		payment   []byte
+		shipment  []byte
+		lastRetry *time.Time
 	)
 
 	err := row.Scan(&order.ID, &order.Username, &order.Email, &order.Phone,
 		&address, &items, &order.Total, &order.Status,
 		&order.ShippingCost, &order.Courier, &order.CourierService,
-		&order.SnapToken, &order.PaymentURL, &payment, &shipment, &order.CreatedAt)
+		&order.SnapToken, &order.PaymentURL, &payment, &shipment, &order.CreatedAt,
+		&order.ShipmentAttempts, &lastRetry)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderNotFound
 	}
@@ -387,6 +440,9 @@ func scanOrder(row pgx.Row) (*model.UserOrder, error) {
 		if err := json.Unmarshal(shipment, &info); err == nil {
 			order.Shipment = &info
 		}
+	}
+	if lastRetry != nil {
+		order.ShipmentLastAttemptAt = lastRetry
 	}
 
 	return &order, nil

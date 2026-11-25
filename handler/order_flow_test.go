@@ -593,6 +593,50 @@ func TestFlowReconcilePendingKeepsOpenTransaction(t *testing.T) {
 	}
 }
 
+// Case 9: the background retrier and the admin button share one idempotent
+// path, so a recovering provider never produces two shipments.
+func TestFlowRetryShipmentForIsIdempotent(t *testing.T) {
+	flow := newFlowApp(t, nil, nil, "")
+	flow.shipping.shipmentErr = errors.New("provider is down")
+
+	order := validOrder(model.Item{ID: 1, Qty: 2})
+	order.Courier = "jne"
+	order.CourierService = "reg"
+
+	_, created := postOrderModel(t, flow.app, order)
+	flow.gateway.status = settlement("27000.00")
+	if resp := notify(t, flow.app, created.ID); resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("notification status = %d, want 200", resp.StatusCode)
+	}
+
+	stored, err := flow.orders.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+	if flow.orderHandler.RetryShipmentFor(*stored) {
+		t.Fatal("retry reported success while the provider is down")
+	}
+
+	flow.shipping.shipmentErr = nil
+	if !flow.orderHandler.RetryShipmentFor(*stored) {
+		t.Fatal("retry did not create the shipment")
+	}
+
+	// A second retry must reuse the existing shipment instead of calling the
+	// provider again.
+	calls := len(flow.shipping.shipmentReqs)
+	after, err := flow.orders.FindByID(created.ID)
+	if err != nil {
+		t.Fatalf("find order: %v", err)
+	}
+	if !flow.orderHandler.RetryShipmentFor(*after) {
+		t.Fatal("second retry reported failure")
+	}
+	if got := len(flow.shipping.shipmentReqs); got != calls {
+		t.Fatalf("provider calls = %d, want %d (no duplicate shipment)", got, calls)
+	}
+}
+
 func stockOf(t *testing.T, app *fiber.App, productID int) int {
 	t.Helper()
 

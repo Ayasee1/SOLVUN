@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/mail"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -50,6 +51,11 @@ type OrderHandler struct {
 	// paymentServerKey enables Midtrans signature verification on the webhook.
 	// Empty disables it, which keeps local sandbox setups working.
 	paymentServerKey string
+	// shipmentLocks serialize shipment creation per order. The settlement path,
+	// the admin button, and the background retrier all go through createShipment;
+	// calling the provider twice would create two shipments. Sharded so the map
+	// cannot grow with the order history.
+	shipmentLocks [64]sync.Mutex
 }
 
 func NewOrderHandler(productRepo repository.ProductRepository, orderRepo repository.OrderRepository, gateway payment.Gateway, mailer notification.Sender, shippingProvider shipping.Provider, storeBaseURL string) *OrderHandler {
@@ -490,9 +496,26 @@ func (h *OrderHandler) settleReconciled(order *model.UserOrder, status *payment.
 	}
 }
 
-// createShipment hands the paid order to the shipping provider. Failures are
-// logged and leave the order without a waybill so it can be retried later.
+// createShipment hands the paid order to the shipping provider. It is
+// idempotent per order: a concurrent caller (settlement, admin retry, background
+// retrier) either sees the shipment that already exists or waits for the one
+// being created. Failures are logged and leave the order without a waybill so it
+// can be retried later.
 func (h *OrderHandler) createShipment(order model.UserOrder) *model.ShipmentInfo {
+	if order.Courier == "" {
+		return nil
+	}
+
+	unlock := h.lockShipment(order.ID)
+	defer unlock()
+
+	// Re-read inside the lock: another caller may have created it already.
+	if current, err := h.orderRepo.FindByID(order.ID); err == nil {
+		if current.Shipment != nil && current.Shipment.ProviderID != "" {
+			return current.Shipment
+		}
+		order = *current
+	}
 	if order.Courier == "" {
 		return nil
 	}
@@ -538,6 +561,27 @@ func (h *OrderHandler) createShipment(order model.UserOrder) *model.ShipmentInfo
 
 	log.Printf("shipment created for order %s: %s (%s)", order.ID, shipment.ID, shipment.WaybillID)
 	return info
+}
+
+// RetryShipmentFor creates the provider shipment for a paid order that has none.
+// The background retrier calls it; the admin endpoint and the settlement path
+// share the same idempotent createShipment.
+func (h *OrderHandler) RetryShipmentFor(order model.UserOrder) bool {
+	if order.Status != model.OrderStatusPaid || order.Courier == "" {
+		return false
+	}
+	if order.Shipment != nil && order.Shipment.ProviderID != "" {
+		return true
+	}
+	return h.createShipment(order) != nil
+}
+
+// lockShipment serializes shipment creation for one order without keeping a map
+// that grows with the order history.
+func (h *OrderHandler) lockShipment(id uuid.UUID) func() {
+	slot := &h.shipmentLocks[int(id[0])%len(h.shipmentLocks)]
+	slot.Lock()
+	return slot.Unlock
 }
 
 // sendPaidEmail sends the payment confirmation with the invoice PDF attached.
