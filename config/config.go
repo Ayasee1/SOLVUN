@@ -59,6 +59,9 @@ type Config struct {
 	// only when the request comes from 127.0.0.1 or ::1. Enable it when nginx
 	// runs on the same host; leave it off when the API is directly reachable.
 	TrustProxy bool
+	// RateLimitEnabled blocks a client that floods a public endpoint. Limits
+	// are per client and per route; see routes.SetupRoutes.
+	RateLimitEnabled bool
 }
 
 // Load reads configuration from the environment, falling back to safe defaults.
@@ -80,6 +83,7 @@ func Load() Config {
 		AdminSessionTTLMinutes: getEnvInt("ADMIN_SESSION_TTL_MINUTES", 720),
 		AdminCookieSecure:      getEnvBool("ADMIN_COOKIE_SECURE", true),
 		TrustProxy:             getEnvBool("TRUST_PROXY", false),
+		RateLimitEnabled:       getEnvBool("RATE_LIMIT_ENABLED", true),
 
 		ResendAPIKey: os.Getenv("RESEND_API_KEY"),
 		SMTPHost:     os.Getenv("SMTP_HOST"),

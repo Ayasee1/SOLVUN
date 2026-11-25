@@ -162,7 +162,7 @@ func main() {
 	}))
 
 	// Setup routes
-	routes.SetupRoutes(app, productHandler, orderHandler, shippingHandler, storeConfigHandler, adminAuthHandler, adminSessions)
+	routes.SetupRoutes(app, productHandler, orderHandler, shippingHandler, storeConfigHandler, adminAuthHandler, adminSessions, cfg.RateLimitEnabled)
 
 	// Start the server, then wait for a shutdown signal.
 	go func() {
