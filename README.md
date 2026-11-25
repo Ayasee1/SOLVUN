@@ -134,6 +134,7 @@ All variables are documented in `.env.example`. The most important ones:
 | `SHIPPING_PROVIDER`           | `biteship`, `flat`, or `disabled`                     |
 | `STORE_BASE_URL`              | Public store URL used in payment redirects and emails |
 | `CORS_ORIGINS`                | Comma-separated allowed browser origins               |
+| `TRUST_PROXY`                 | Read client IP from `X-Forwarded-For` (nginx on host) |
 
 ## Admin sign-in
 
@@ -152,9 +153,16 @@ Failed sign-ins are limited to 5 attempts per client per 15 minutes.
 
 ## Deployment notes
 
-- The storefront and admin call the API through `/api`; put a reverse proxy in
-  front of both and rewrite `/api/*` to the Go service.
+A ready-to-use nginx setup lives in `deploy/`: one host, `shop.` and `admin.`
+subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
+`deploy/README.md` for DNS, certificates, upload commands, and verification.
+
+- The storefront and admin call the API through `/api`; the proxy strips that
+  prefix and forwards `/order`, `/orders`, and `/track` untouched because the Go
+  app renders those pages.
 - Set `CORS_ORIGINS` to the real store/admin origins; the default is `*`.
+- Set `TRUST_PROXY=true` when nginx runs on the same host, so logs and the
+  sign-in limiter see the real client IP.
 - Point Midtrans and Biteship webhooks at the public API:
   `/orders/notification` and `/shipping/notification`.
 - Back up the database before deploying: migrations run at startup and are not

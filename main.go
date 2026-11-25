@@ -141,7 +141,17 @@ func main() {
 	go orderSweeper.Run(ctx)
 
 	// Create a new Fiber instance
-	app := fiber.New()
+	fiberConfig := fiber.Config{}
+	if cfg.TrustProxy {
+		// nginx runs on the same host, so only loopback may claim a client IP.
+		// Trusting X-Forwarded-For from anywhere else would let a caller spoof
+		// the address used by the admin sign-in limiter.
+		fiberConfig.ProxyHeader = fiber.HeaderXForwardedFor
+		fiberConfig.EnableTrustedProxyCheck = true
+		fiberConfig.TrustedProxies = []string{"127.0.0.1", "::1"}
+		fiberConfig.EnableIPValidation = true
+	}
+	app := fiber.New(fiberConfig)
 
 	// Recover panics so one bad request cannot take the process down.
 	app.Use(recover.New())
