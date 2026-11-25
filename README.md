@@ -239,7 +239,10 @@ already ran locally.
    sweeper expiring the order at the same moment cannot both win.
 3. A paid order creates a shipment through the configured shipping provider.
 4. Unpaid orders are expired by the sweeper after `ORDER_PENDING_TTL_MINUTES`
-   and their stock is released.
+   and their stock is released. Before expiring, the sweeper asks Midtrans for
+   the real status: a payment that settled while the webhook was missing is
+   confirmed instead of expired. If Midtrans is unreachable the order keeps its
+   stock and is retried on the next tick, for at most 24 hours.
 
 Statuses: `pending`, `paid`, `expired`, `cancelled`, `needs_refund`.
 
@@ -335,7 +338,7 @@ All variables are documented in `.env.example`. The most important ones:
 | `ADMIN_SESSION_TTL_MINUTES` | admin session lifetime (default 720) |
 | `ADMIN_COOKIE_SECURE` | mark the session cookie `Secure` (default `true`) |
 | `MIDTRANS_*` | Snap client/server keys and environment |
-| `ORDER_PENDING_TTL_MINUTES` | how long unpaid orders keep stock reserved (default 20) |
+| `ORDER_PENDING_TTL_MINUTES` | how long unpaid orders keep stock reserved (default 20; keep above `MIDTRANS_EXPIRY_MINUTES`) |
 | `ORDER_SWEEP_INTERVAL_SECONDS` | sweeper interval (default 60) |
 | `SHIPPING_PROVIDER` | `biteship`, `flat`, or `disabled` |
 | `STORE_BASE_URL` | public store URL used in payment redirects and emails |

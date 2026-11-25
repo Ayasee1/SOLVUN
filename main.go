@@ -137,7 +137,7 @@ func main() {
 
 	// Expire unpaid orders so their reserved stock returns to the catalog even
 	// when the payment webhook never arrives.
-	orderSweeper := sweeper.New(orderRepo, productRepo,
+	orderSweeper := sweeper.New(orderRepo, productRepo, orderHandler,
 		time.Duration(cfg.OrderPendingTTLMinutes)*time.Minute,
 		time.Duration(cfg.OrderSweepIntervalSeconds)*time.Second)
 	go orderSweeper.Run(ctx)

@@ -454,30 +454,39 @@ func sha512Hex(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// reconcilePendingOrder is the fallback for local/dev setups where the Midtrans
-// webhook cannot reach the server. It asks Midtrans for the authoritative status
-// whenever a pending order page is loaded (the page refreshes itself).
-func (h *OrderHandler) reconcilePendingOrder(order *model.UserOrder) {
+// ReconcilePending asks the payment provider for the authoritative state of a
+// pending order and applies it. settled reports that the order is no longer
+// pending; verified is false when the provider could not be reached, which the
+// sweeper uses to keep the stock reserved instead of guessing.
+func (h *OrderHandler) ReconcilePending(order model.UserOrder) (settled bool, verified bool) {
 	if order.Status != model.OrderStatusPending {
-		return
+		return true, true
 	}
 
 	status, err := h.gateway.CheckStatus(order.ID.String())
 	if err != nil {
 		log.Printf("order %s: could not verify payment: %v", order.ID, err)
-		return
+		return false, false
 	}
 
 	switch status.TransactionStatus {
 	case "capture":
 		if status.FraudStatus == "accept" {
-			h.settleReconciled(order, status)
+			h.settleReconciled(&order, status)
+			return true, true
 		}
+		return false, true
 	case "settlement":
-		h.settleReconciled(order, status)
+		h.settleReconciled(&order, status)
+		return true, true
 	case "cancel", "expire":
 		h.expireOrder(order.ID)
+		return true, true
 	}
+
+	// pending or deny: the transaction is still open (or retryable), so let the
+	// TTL decide.
+	return false, true
 }
 
 func (h *OrderHandler) settleReconciled(order *model.UserOrder, status *payment.StatusResult) {
