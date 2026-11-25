@@ -129,6 +129,103 @@ previous run for that branch.
   directly. If Actions is unavailable, disable the ruleset under
   **Settings → Rules**, merge, then re-enable it.
 
+## Daily workflow
+
+`main` is protected: every change goes through a pull request and the aggregate
+`CI` check has to pass. Direct pushes and force-pushes to `main` are rejected,
+so the loop below is the normal way to ship.
+
+### 1. Start from a clean `main`
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c fix/stock-double-release
+```
+
+Name branches `fix/…`, `feat/…`, `docs/…`, or `chore/…`. Committing on `main`
+locally is harmless but cannot be pushed; branch first.
+
+### 2. Work, then run what CI runs
+
+```bash
+# backend
+gofmt -l . && go vet ./... && go test ./...
+
+# storefront
+cd web && bun run build
+
+# admin
+cd admin && bun run lint && bun run format:check && bun run build && bun run test
+
+# only when deploy/nginx changed
+bash deploy/nginx/test.sh
+```
+
+Admin `lint` and `format:check` are the two checks that fail most often; running
+them before pushing saves a two-minute round trip.
+
+### 3. Push and open the pull request
+
+```bash
+git add -A
+git commit -m "Short summary" -m "Why this change is needed."
+git push -u origin HEAD
+gh pr create --fill          # title and body come from the commits
+gh pr checks --watch         # live status; Ctrl+C stops watching
+gh pr view --web             # open it in the browser
+```
+
+The PR reports six checks:
+
+| Check | What it covers |
+| --- | --- |
+| `Backend (Go)` | gofmt, vet, `go test -race`, build |
+| `Storefront (web)` | install + production build |
+| `Admin (lint + build)` | eslint, Prettier, tsc + build |
+| `Admin (browser tests)` | Vitest in Chromium |
+| `Nginx config` | `nginx -t` + 16 routing assertions |
+| `CI` | the gate; this is the one that blocks the merge |
+
+### 4. If a check fails
+
+```bash
+gh pr checks                  # which check is red
+gh run view --log-failed      # only the failing steps
+```
+
+Fix it locally with the commands from step 2, commit, and push to the same
+branch. The old run is cancelled and a new one starts automatically.
+
+### 5. Merge and clean up
+
+```bash
+gh pr merge --rebase --delete-branch
+git switch main
+git pull --ff-only
+```
+
+"Rebase and merge" keeps history linear; merge commits and squash are also
+allowed by the ruleset, so pick one and stay consistent. `--delete-branch`
+removes the branch locally and on the remote; if the local copy survives, drop it
+with `git branch -d <branch>`.
+
+### When Actions is unavailable
+
+Nothing can be merged while GitHub is not creating workflow runs, because the
+ruleset has no bypass actors. Unblock with **Settings → Rules → `main: require CI
+and pull requests` → Disable**, merge, then **Enable** it again. Changes made
+while the ruleset is disabled are not verified by CI, so merge something you
+already ran locally.
+
+### Rejected operations
+
+| Message | Meaning | Fix |
+| --- | --- | --- |
+| `push declined due to repository rule violations` | you pushed to `main` | branch, then open a PR |
+| `Required status check "CI" is expected` | same cause, no run exists yet | branch, then open a PR |
+| `! [rejected] main -> main (non-fast-forward)` | force-push blocked | rebase your branch onto `main` instead |
+
 ## Order lifecycle
 
 1. `POST /orders` validates the cart, recomputes prices and shipping from the
