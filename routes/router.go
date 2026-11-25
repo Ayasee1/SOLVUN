@@ -73,6 +73,7 @@ func SetupRoutes(app *fiber.App, ph *handler.ProductHandler, oh *handler.OrderHa
 	admin := app.Group("/admin", middleware.AdminAuth(adminSessions))
 	admin.Get("/orders", oh.GetOrders)
 	admin.Get("/orders/:id", oh.GetOrderByID)
+	admin.Post("/orders/:id/shipment", oh.RetryShipment)
 	admin.Get("/products", ph.GetAllProducts)
 	admin.Patch("/products/:id", ph.UpdateProduct)
 	admin.Delete("/products/:id", ph.DeleteProduct)

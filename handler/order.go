@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"crypto/sha512"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"math"
+	"net/mail"
 	"strconv"
 	"time"
 
@@ -17,6 +21,13 @@ import (
 	"golearn/payment"
 	"golearn/repository"
 	"golearn/shipping"
+)
+
+// Cart bounds. They keep one request from fanning out into thousands of
+// catalog lookups, and stop quantity multiplication from overflowing.
+const (
+	maxOrderLines = 50
+	maxItemQty    = 100
 )
 
 // errShippingUnavailable is returned when the requested courier/service is not
@@ -36,6 +47,9 @@ type OrderHandler struct {
 	storeLat     float64
 	storeLon     float64
 	storeAddress string
+	// paymentServerKey enables Midtrans signature verification on the webhook.
+	// Empty disables it, which keeps local sandbox setups working.
+	paymentServerKey string
 }
 
 func NewOrderHandler(productRepo repository.ProductRepository, orderRepo repository.OrderRepository, gateway payment.Gateway, mailer notification.Sender, shippingProvider shipping.Provider, storeBaseURL string) *OrderHandler {
@@ -54,6 +68,12 @@ func (h *OrderHandler) SetStoreOrigin(lat, lon float64, address string) {
 	h.storeLat = lat
 	h.storeLon = lon
 	h.storeAddress = address
+}
+
+// SetPaymentServerKey turns on Midtrans webhook signature verification. The key
+// is the same Midtrans server key used for API calls.
+func (h *OrderHandler) SetPaymentServerKey(key string) {
+	h.paymentServerKey = key
 }
 
 // orderPageURL is the public page the customer can open to follow the order.
@@ -95,10 +115,23 @@ func (h *OrderHandler) CreateOrder(c *fiber.Ctx) error {
 			"error": "Order item is empty",
 		})
 	}
+	if len(order.OrderItem) > maxOrderLines {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": fmt.Sprintf("Too many order lines (max %d)", maxOrderLines),
+		})
+	}
 
 	if order.Username == "" || order.Email == "" || order.Phone == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Username, email or phone is empty",
+		})
+	}
+
+	// Reject anything that is not a plain address: the value ends up in a mail
+	// header, where a line break would inject extra headers.
+	if _, err := mail.ParseAddress(order.Email); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid email address",
 		})
 	}
 
@@ -128,9 +161,9 @@ func (h *OrderHandler) CreateOrder(c *fiber.Ctx) error {
 				"error": "Failed to load product",
 			})
 		}
-		if item.Qty <= 0 {
+		if item.Qty <= 0 || item.Qty > maxItemQty {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": fmt.Sprintf("Invalid quantity for product %s", product.Name),
+				"error": fmt.Sprintf("Quantity for product %s must be between 1 and %d", product.Name, maxItemQty),
 			})
 		}
 
@@ -247,12 +280,27 @@ func (h *OrderHandler) resolveShipping(address model.Address, weight int, items 
 // status itself, so we never trust the payload body beyond the order id.
 func (h *OrderHandler) Notification(c *fiber.Ctx) error {
 	var payload struct {
-		OrderID string `json:"order_id"`
+		OrderID      string `json:"order_id"`
+		StatusCode   string `json:"status_code"`
+		GrossAmount  string `json:"gross_amount"`
+		SignatureKey string `json:"signature_key"`
 	}
 	if err := c.BodyParser(&payload); err != nil || payload.OrderID == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Invalid notification",
 		})
+	}
+
+	// Midtrans signs order_id + status_code + gross_amount with the server key.
+	// Checking it first rejects forged traffic before it can trigger an outbound
+	// API call. Without a configured key (local sandbox) the check is skipped.
+	if h.paymentServerKey != "" {
+		expected := sha512Hex(payload.OrderID + payload.StatusCode + payload.GrossAmount + h.paymentServerKey)
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(payload.SignatureKey)) != 1 {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Invalid signature",
+			})
+		}
 	}
 
 	id, err := uuid.Parse(payload.OrderID)
@@ -332,41 +380,78 @@ func (h *OrderHandler) settlePaidOrder(order *model.UserOrder, status *payment.S
 		SettledAt:     status.SettlementTime,
 	}
 
-	switch order.Status {
-	case model.OrderStatusPaid, model.OrderStatusNeedsRefund:
-		// duplicate notification: already handled (idempotent)
+	// A duplicate notification for an order that is already settled.
+	if order.Status == model.OrderStatusPaid || order.Status == model.OrderStatusNeedsRefund {
 		return nil
+	}
 
-	case model.OrderStatusExpired, model.OrderStatusCancelled:
-		// late payment: stock was released, try to take it back
-		requested := map[int]int{}
-		for _, item := range order.OrderItem {
-			requested[item.ID] += item.Qty
+	// Claim the order before touching stock. The compare-and-set only succeeds
+	// for one of several concurrent notifications, and it also covers the window
+	// where the sweeper expires the order between our read and our write.
+	from := order.Status
+	claimed, confirmed, err := h.orderRepo.TransitionStatusWithPayment(order.ID, from, model.OrderStatusPaid, info)
+	if err != nil {
+		return err
+	}
+
+	if !confirmed {
+		current, findErr := h.orderRepo.FindByID(order.ID)
+		if findErr != nil {
+			return findErr
 		}
-		if err := h.productRepo.DecreaseStock(requested); err != nil {
-			// the order can no longer be fulfilled -> the customer must be refunded
-			if _, _, err := h.orderRepo.TransitionStatusWithPayment(order.ID, order.Status, model.OrderStatusNeedsRefund, info); err != nil {
+		switch current.Status {
+		case model.OrderStatusPaid, model.OrderStatusNeedsRefund:
+			// Another notification settled it while we were reading.
+			return nil
+		case model.OrderStatusExpired, model.OrderStatusCancelled:
+			// The sweeper (or a cancel) won the race: the payment still arrived,
+			// so retry the claim against the status we found.
+			from = current.Status
+			claimed, confirmed, err = h.orderRepo.TransitionStatusWithPayment(order.ID, from, model.OrderStatusPaid, info)
+			if err != nil {
 				return err
+			}
+			if !confirmed {
+				return nil
+			}
+		default:
+			return nil
+		}
+	}
+
+	// Pending orders reserved their stock at creation. Expired and cancelled
+	// orders had it released, so take it back now that this call owns the order.
+	if from == model.OrderStatusExpired || from == model.OrderStatusCancelled {
+		if err := h.productRepo.DecreaseStock(requestedItems(claimed)); err != nil {
+			// The order can no longer be fulfilled: flag it for a manual refund.
+			if _, _, rerr := h.orderRepo.TransitionStatusWithPayment(order.ID, model.OrderStatusPaid, model.OrderStatusNeedsRefund, info); rerr != nil {
+				return rerr
 			}
 			return nil
 		}
 	}
 
-	// stock is reserved (or just re-reserved) -> confirm the payment
-	updated, confirmed, err := h.orderRepo.TransitionStatusWithPayment(order.ID, order.Status, model.OrderStatusPaid, info)
-	if err != nil {
-		return err
+	if shipment := h.createShipment(*claimed); shipment != nil {
+		claimed.Shipment = shipment
 	}
-
-	// only when this call actually confirmed the order (idempotent webhooks)
-	if confirmed {
-		if shipment := h.createShipment(*updated); shipment != nil {
-			updated.Shipment = shipment
-		}
-		h.sendPaidEmail(*updated)
-	}
+	h.sendPaidEmail(*claimed)
 
 	return nil
+}
+
+// requestedItems sums the quantity per product for stock operations.
+func requestedItems(order *model.UserOrder) map[int]int {
+	requested := make(map[int]int, len(order.OrderItem))
+	for _, item := range order.OrderItem {
+		requested[item.ID] += item.Qty
+	}
+	return requested
+}
+
+// sha512Hex is the format Midtrans uses for signature_key.
+func sha512Hex(value string) string {
+	sum := sha512.Sum512([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 // reconcilePendingOrder is the fallback for local/dev setups where the Midtrans
@@ -486,6 +571,14 @@ func (h *OrderHandler) ShippingNotification(c *fiber.Ctx) error {
 		})
 	}
 
+	// The id is interpolated into the provider URL, so only accept the shape a
+	// provider actually issues.
+	if !shipping.ValidProviderID(payload.OrderID) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid shipment id",
+		})
+	}
+
 	shipment, err := h.shipping.Tracking(payload.OrderID)
 	if err != nil {
 		if errors.Is(err, shipping.ErrNotConfigured) {
@@ -533,6 +626,55 @@ func (h *OrderHandler) ShippingNotification(c *fiber.Ctx) error {
 	}
 
 	return c.SendString("ok")
+}
+
+// RetryShipment (admin) creates the provider shipment for a paid order that does
+// not have one yet, so a provider outage does not leave the order stuck.
+func (h *OrderHandler) RetryShipment(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid order id",
+		})
+	}
+
+	order, err := h.orderRepo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error": "Order not found",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Internal server error",
+		})
+	}
+
+	if order.Status != model.OrderStatusPaid {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"error": fmt.Sprintf("Only paid orders can be shipped (current status: %s)", order.Status),
+		})
+	}
+	if order.Shipment != nil && order.Shipment.ProviderID != "" {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"error": "Order already has a shipment",
+		})
+	}
+	if order.Courier == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Order has no courier",
+		})
+	}
+
+	info := h.createShipment(*order)
+	if info == nil {
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+			"error": "Shipping provider rejected the shipment",
+		})
+	}
+
+	order.Shipment = info
+	return c.JSON(order)
 }
 
 func toShipmentEvents(events []shipping.ShipmentEvent) []model.ShipmentEvent {
@@ -586,11 +728,9 @@ func (h *OrderHandler) expireOrder(id uuid.UUID) {
 		return
 	}
 
-	requested := map[int]int{}
-	for _, item := range order.OrderItem {
-		requested[item.ID] += item.Qty
+	if err := h.productRepo.ReleaseStock(requestedItems(order)); err != nil {
+		log.Printf("failed to release stock for expired order %s: %v", id, err)
 	}
-	_ = h.productRepo.ReleaseStock(requested)
 }
 
 // GetOrders lists orders (admin), optionally filtered by ?status=
@@ -665,11 +805,10 @@ func (h *OrderHandler) CancelOrder(c *fiber.Ctx) error {
 		})
 	}
 
-	requested := map[int]int{}
-	for _, item := range order.OrderItem {
-		requested[item.ID] += item.Qty
+	requested := requestedItems(order)
+	if err := h.productRepo.ReleaseStock(requested); err != nil {
+		log.Printf("failed to release stock for cancelled order %s: %v", order.ID, err)
 	}
-	_ = h.productRepo.ReleaseStock(requested)
 
 	return c.JSON(order)
 }

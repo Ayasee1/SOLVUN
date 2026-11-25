@@ -14,3 +14,9 @@ export function fetchOrder(id: string) {
 export function cancelOrder(id: string) {
   return api.post<Order>(`/orders/${id}/cancel`)
 }
+
+// retryShipment asks the API to create the provider shipment for a paid order
+// whose shipment creation failed.
+export function retryShipment(id: string) {
+  return api.post<Order>(`/admin/orders/${id}/shipment`)
+}

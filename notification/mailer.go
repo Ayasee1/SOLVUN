@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/smtp"
+	"strings"
 )
 
 type Attachment struct {
@@ -58,9 +59,9 @@ func (s SMTPSender) Send(msg Message) error {
 
 func (s SMTPSender) buildMIME(msg Message) []byte {
 	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "From: %s\r\n", s.From)
-	fmt.Fprintf(&buf, "To: %s\r\n", msg.To)
-	fmt.Fprintf(&buf, "Subject: %s\r\n", msg.Subject)
+	fmt.Fprintf(&buf, "From: %s\r\n", headerValue(s.From))
+	fmt.Fprintf(&buf, "To: %s\r\n", headerValue(msg.To))
+	fmt.Fprintf(&buf, "Subject: %s\r\n", headerValue(msg.Subject))
 	buf.WriteString("MIME-Version: 1.0\r\n")
 
 	if len(msg.Attachments) == 0 {
@@ -84,9 +85,9 @@ func (s SMTPSender) buildMIME(msg Message) []byte {
 	// attachments, base64 encoded and wrapped at 76 characters
 	for _, attachment := range msg.Attachments {
 		fmt.Fprintf(&buf, "--%s\r\n", boundary)
-		fmt.Fprintf(&buf, "Content-Type: %s; name=\"%s\"\r\n", attachment.ContentType, attachment.Filename)
+		fmt.Fprintf(&buf, "Content-Type: %s; name=\"%s\"\r\n", headerValue(attachment.ContentType), headerValue(attachment.Filename))
 		buf.WriteString("Content-Transfer-Encoding: base64\r\n")
-		fmt.Fprintf(&buf, "Content-Disposition: attachment; filename=\"%s\"\r\n", attachment.Filename)
+		fmt.Fprintf(&buf, "Content-Disposition: attachment; filename=\"%s\"\r\n", headerValue(attachment.Filename))
 		buf.WriteString("\r\n")
 
 		encoded := base64.StdEncoding.EncodeToString(attachment.Data)
@@ -102,3 +103,11 @@ func (s SMTPSender) buildMIME(msg Message) []byte {
 	fmt.Fprintf(&buf, "--%s--\r\n", boundary)
 	return buf.Bytes()
 }
+
+// headerValue strips line breaks so a caller-supplied value cannot start a new
+// header (header injection) when the message is built by hand.
+func headerValue(value string) string {
+	return headerSanitizer.Replace(value)
+}
+
+var headerSanitizer = strings.NewReplacer("\r", "", "\n", "")

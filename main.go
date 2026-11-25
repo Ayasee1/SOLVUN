@@ -122,6 +122,8 @@ func main() {
 	productHandler := handler.NewProductHandler(productRepo)
 	orderHandler := handler.NewOrderHandler(productRepo, orderRepo, paymentGateway, mailer, shippingProvider, cfg.StoreBaseURL)
 	orderHandler.SetStoreOrigin(cfg.StoreOriginLat, cfg.StoreOriginLon, cfg.StoreOriginAddress)
+	// Enables Midtrans signature verification on the payment webhook.
+	orderHandler.SetPaymentServerKey(cfg.MidtransServerKey)
 	shippingHandler := handler.NewShippingHandler(shippingProvider, productRepo)
 	storeConfigHandler := handler.NewStoreConfigHandler(cfg.MidtransClientKey, cfg.MidtransEnv)
 
