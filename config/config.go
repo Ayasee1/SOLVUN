@@ -176,6 +176,18 @@ func getEnvBool(key string, fallback bool) bool {
 	}
 }
 
+// PaymentWindowExceedsOrderTTL reports whether the Midtrans payment window is
+// longer than the order reservation TTL. When it is, a customer can pay after
+// the sweeper released the stock, which only ends in a refund.
+func (c Config) PaymentWindowExceedsOrderTTL() bool {
+	expiry := c.MidtransExpiryMinutes
+	if expiry <= 0 {
+		// Midtrans defaults to a 24 hour Snap window.
+		expiry = 24 * 60
+	}
+	return expiry > c.OrderPendingTTLMinutes
+}
+
 // AllowedOrigins returns the configured CORS origins, or ["*"] when unset.
 func (c Config) AllowedOrigins() []string {
 	if strings.TrimSpace(c.CORSOrigins) == "" {

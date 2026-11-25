@@ -37,4 +37,7 @@ type Gateway interface {
 	// Refund returns the money for a captured payment. It must be idempotent per
 	// order: retrying after a crash cannot refund the same payment twice.
 	Refund(orderID string, amount int, reason string) error
+	// Expire closes the payment window at the provider so an order that was
+	// cancelled or swept can no longer be paid.
+	Expire(orderID string) error
 }

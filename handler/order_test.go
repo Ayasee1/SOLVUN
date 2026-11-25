@@ -38,6 +38,8 @@ type fakeGateway struct {
 	charged     *model.UserOrder
 	refundErr   error
 	refundCalls int
+	expireErr   error
+	expireCalls int
 }
 
 type fakeShippingProvider struct {
@@ -97,6 +99,11 @@ func (f *fakeGateway) Charge(order model.UserOrder) (*payment.ChargeResult, erro
 func (f *fakeGateway) Refund(orderID string, amount int, reason string) error {
 	f.refundCalls++
 	return f.refundErr
+}
+
+func (f *fakeGateway) Expire(orderID string) error {
+	f.expireCalls++
+	return f.expireErr
 }
 
 func (f *fakeGateway) CheckStatus(orderID string) (*payment.StatusResult, error) {

@@ -121,6 +121,17 @@ func (g *MidtransGateway) Refund(orderID string, amount int, reason string) erro
 	return nil
 }
 
+// Expire closes the Snap/payment window for an order that was cancelled or
+// expired locally. Midtrans rejects this when the transaction already settled,
+// which is expected and logged by the caller.
+func (g *MidtransGateway) Expire(orderID string) error {
+	_, mErr := g.core.ExpireTransaction(orderID)
+	if mErr != nil {
+		return errors.New(mErr.GetMessage())
+	}
+	return nil
+}
+
 func (g *MidtransGateway) CheckStatus(orderID string) (*StatusResult, error) {
 	resp, mErr := g.core.CheckTransaction(orderID)
 	if mErr != nil {
