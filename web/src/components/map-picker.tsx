@@ -25,7 +25,11 @@ export function MapPicker({ value, onChange }: Props) {
   const [position, setPosition] = useState<LatLon | null>(value ?? null)
 
   useEffect(() => {
-    if (value && (!position || value.lat !== position.lat || value.lon !== position.lon)) {
+    if (!value) {
+      setPosition(null)
+      return
+    }
+    if (!position || value.lat !== position.lat || value.lon !== position.lon) {
       setPosition(value)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
