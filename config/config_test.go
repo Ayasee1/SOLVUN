@@ -41,6 +41,20 @@ func TestAdminDefaults(t *testing.T) {
 	}
 }
 
+func TestRateLimitSetting(t *testing.T) {
+	t.Setenv("RATE_LIMIT_ENABLED", "")
+
+	if cfg := Load(); !cfg.RateLimitEnabled {
+		t.Fatal("RateLimitEnabled should default to true")
+	}
+
+	t.Setenv("RATE_LIMIT_ENABLED", "false")
+
+	if cfg := Load(); cfg.RateLimitEnabled {
+		t.Fatal("RateLimitEnabled should be false when configured")
+	}
+}
+
 func TestTrustProxy(t *testing.T) {
 	t.Setenv("TRUST_PROXY", "")
 

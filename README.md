@@ -269,6 +269,34 @@ Admin, all requiring a session:
 | `PATCH` | `/admin/products/:id` | price, stock, visibility |
 | `DELETE` | `/admin/products/:id` | remove a product |
 
+### Rate limits
+
+Public endpoints are limited per client address with a sliding one-minute
+window. Exceeding a limit returns `429` with `Retry-After` and
+`{"error":"Too many requests, please slow down"}`. Buckets are independent per
+route, so exhausting the order budget still lets the storefront load products.
+
+| Endpoint | Requests per minute |
+| --- | --- |
+| `POST /orders` | 5 |
+| `POST /orders/:id/cancel` | 5 |
+| `GET /orders/:id/invoice.pdf` | 10 |
+| `POST /track` | 10 |
+| `POST /shipping/rates` | 20 |
+| `GET /orders/:id`, `GET /track` | 30 |
+| `GET /order/:id`, `GET /store/config`, `POST /cart` | 60 |
+| `GET /products`, `GET /products/:id` | 120 |
+| `POST /orders/notification`, `POST /shipping/notification` | 120 |
+
+- The client key is `c.IP()`. Behind nginx that is the real address only when
+  `TRUST_PROXY=true`; otherwise every request looks like `127.0.0.1`.
+- Buckets live in process memory: they reset on restart and, with more than one
+  instance, the limit applies per instance.
+- `RATE_LIMIT_ENABLED=false` disables all of them, which is handy for load
+  tests. Leave it on in production.
+- `GET /health` and the admin session endpoints are not limited; sign-in has its
+  own limiter in the handler and a second one in nginx.
+
 ## Admin sign-in
 
 The admin is a single-operator dashboard, so credentials come from the
@@ -307,6 +335,7 @@ All variables are documented in `.env.example`. The most important ones:
 | `STORE_BASE_URL` | public store URL used in payment redirects and emails |
 | `CORS_ORIGINS` | comma-separated allowed browser origins |
 | `TRUST_PROXY` | read client IP from `X-Forwarded-For` (nginx on host) |
+| `RATE_LIMIT_ENABLED` | per-client limits on public endpoints (default `true`) |
 
 ## Deployment
 
@@ -330,9 +359,9 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 
 - Admin sessions live in memory: a restart signs the operator out, and running
   more than one API instance would need a shared session store.
-- Public endpoints have no rate limiting yet. Only admin sign-in is limited
-  (app-level plus nginx), so `POST /orders`, `/shipping/rates`, and the webhooks
-  can be called as fast as a client likes.
+- Webhook handlers do not verify the provider signature before calling out to
+  Midtrans or Biteship, so forged notifications still cost outbound requests.
+  The rate limit caps the volume, not the trust.
 - Admin lists load every row. Orders accept a `?status=` filter, but there is no
   pagination anywhere and the product list is filtered in the browser.
 - `GET /orders/:id` is a capability URL: anyone holding the link can read the
