@@ -59,6 +59,15 @@ type CreatedOrder = {
   total: number
   snap_token?: string
   payment_url?: string
+  access_token?: string
+}
+
+// orderPagePath builds the guest link. The token is what authorises the order
+// page; the id alone is not enough.
+function orderPagePath(order: CreatedOrder) {
+  return order.access_token
+    ? `/order/${order.id}?t=${encodeURIComponent(order.access_token)}`
+    : `/order/${order.id}`
 }
 
 const DRAFT_KEY = 'golearn.checkout'
@@ -935,7 +944,7 @@ const key = (rate: ShippingRate) => `${rate.courier}|${rate.service}`
 // available we still avoid a same-tab redirect: the hosted payment page opens
 // in a popup window instead, while the shopper stays on the status screen.
 async function startPayment(order: CreatedOrder) {
-  const orderPath = `/order/${order.id}`
+  const orderPath = orderPagePath(order)
   const token = order.snap_token
 
   if (token) {
@@ -999,14 +1008,19 @@ function openPaymentPopup(url: string) {
 
 function PaymentPending({ order }: { order: CreatedOrder }) {
   const [status, setStatus] = useState('pending')
-  const orderPath = `/order/${order.id}`
+  const orderPath = orderPagePath(order)
+  const tokenQuery = order.access_token
+    ? `?t=${encodeURIComponent(order.access_token)}`
+    : ''
 
   useEffect(() => {
     let cancelled = false
 
     const check = async () => {
       try {
-        const data = await api.get<{ status: string }>(`/orders/${order.id}`)
+        const data = await api.get<{ status: string }>(
+          `/orders/${order.id}${tokenQuery}`
+        )
         if (cancelled) return
         setStatus(data.status)
         if (data.status !== 'pending') {
@@ -1023,7 +1037,7 @@ function PaymentPending({ order }: { order: CreatedOrder }) {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [order.id, orderPath])
+  }, [order.id, orderPath, tokenQuery])
 
   return (
     <main className='mx-auto max-w-xl px-4 py-20'>

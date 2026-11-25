@@ -535,7 +535,7 @@ const orderPageHTML = `<!doctype html>
 				<p class="label">Actions</p>
 				<div class="actions">
 					{{if .PaymentURL}}{{if eq (printf "%s" .Status) "pending"}}<a class="btn" href="{{.PaymentURL}}">Pay now</a>{{end}}{{end}}
-					<a class="btn line" href="/orders/{{.ID.String}}/invoice.pdf">Download invoice</a>
+					<a class="btn line" href="{{.InvoiceURL}}">Download invoice</a>
 					<a class="btn line" href="/track">Track another order</a>
 				</div>
 			</div>

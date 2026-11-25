@@ -307,7 +307,7 @@ func TestFlowDuplicateLatePaymentReservesStockOnce(t *testing.T) {
 
 	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 2}))
 
-	cancelReq, _ := http.NewRequest(http.MethodPost, "/orders/"+created.ID.String()+"/cancel", nil)
+	cancelReq, _ := http.NewRequest(http.MethodPost, cancelURL(created), nil)
 	if resp, err := flow.app.Test(cancelReq); err != nil || resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("cancel failed: %v", err)
 	}
@@ -723,7 +723,7 @@ func needsRefundOrder(t *testing.T, flow *flowApp) model.UserOrder {
 	t.Helper()
 
 	_, first := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 10}))
-	cancelReq, _ := http.NewRequest(http.MethodPost, "/orders/"+first.ID.String()+"/cancel", nil)
+	cancelReq, _ := http.NewRequest(http.MethodPost, cancelURL(first), nil)
 	if resp, err := flow.app.Test(cancelReq); err != nil || resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("cancel: %v", err)
 	}
@@ -823,7 +823,7 @@ func TestFlowCancelExpiresPayment(t *testing.T) {
 	flow := newFlowApp(t, nil, nil, "")
 	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 2}))
 
-	req, _ := http.NewRequest(http.MethodPost, "/orders/"+created.ID.String()+"/cancel", nil)
+	req, _ := http.NewRequest(http.MethodPost, cancelURL(created), nil)
 	resp, err := flow.app.Test(req)
 	if err != nil || resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("cancel: %v / %d", err, resp.StatusCode)
@@ -850,7 +850,7 @@ func TestFlowCancelWorksWhenExpireFails(t *testing.T) {
 	flow.gateway.expireErr = errors.New("transaction already settled")
 
 	_, created := postOrderModel(t, flow.app, validOrder(model.Item{ID: 1, Qty: 2}))
-	req, _ := http.NewRequest(http.MethodPost, "/orders/"+created.ID.String()+"/cancel", nil)
+	req, _ := http.NewRequest(http.MethodPost, cancelURL(created), nil)
 	resp, err := flow.app.Test(req)
 	if err != nil || resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("cancel: %v / %d", err, resp.StatusCode)

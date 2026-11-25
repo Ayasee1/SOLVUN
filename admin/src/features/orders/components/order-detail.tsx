@@ -141,7 +141,7 @@ export function OrderDetail({ orderId }: { orderId: string }) {
               </Badge>
               <Button variant='outline' asChild>
                 <a
-                  href={`/api/orders/${order.id}/invoice.pdf`}
+                  href={`/api/admin/orders/${order.id}/invoice.pdf`}
                   target='_blank'
                   rel='noreferrer'
                 >

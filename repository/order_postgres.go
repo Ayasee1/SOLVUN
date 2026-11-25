@@ -26,7 +26,7 @@ func NewPostgresOrderRepository(pool *pgxpool.Pool) *PostgresOrderRepository {
 	return &PostgresOrderRepository{pool: pool}
 }
 
-const orderColumns = `id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, refund, created_at, shipment_attempts, shipment_last_attempt_at`
+const orderColumns = `id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, refund, access_token, created_at, shipment_attempts, shipment_last_attempt_at`
 
 func (r *PostgresOrderRepository) Save(order model.UserOrder) error {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
@@ -59,11 +59,11 @@ func (r *PostgresOrderRepository) Save(order model.UserOrder) error {
 	}
 
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO orders (id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, refund, created_at, shipment_attempts, shipment_last_attempt_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+		INSERT INTO orders (id, username, email, phone, address, items, total, status, shipping_cost, courier, courier_service, snap_token, payment_url, payment, shipment, refund, access_token, created_at, shipment_attempts, shipment_last_attempt_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		order.ID, order.Username, order.Email, order.Phone, address, items,
 		order.Total, order.Status, order.ShippingCost, order.Courier, order.CourierService,
-		order.SnapToken, order.PaymentURL, payment, shipment, refund, createdAt,
+		order.SnapToken, order.PaymentURL, payment, shipment, refund, order.AccessToken, createdAt,
 		order.ShipmentAttempts, order.ShipmentLastAttemptAt)
 	return err
 }
@@ -434,6 +434,21 @@ func (r *PostgresOrderRepository) SettlePaid(id uuid.UUID, from model.OrderStatu
 	return order, SettleClaimed, nil
 }
 
+// SetAccessToken stores the guest access token for an order.
+func (r *PostgresOrderRepository) SetAccessToken(id uuid.UUID, token string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	tag, err := r.pool.Exec(ctx, `UPDATE orders SET access_token = $2 WHERE id = $1`, id, token)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrOrderNotFound
+	}
+	return nil
+}
+
 func (r *PostgresOrderRepository) SetShipment(id uuid.UUID, info model.ShipmentInfo) error {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
@@ -488,7 +503,7 @@ func scanOrder(row pgx.Row) (*model.UserOrder, error) {
 	err := row.Scan(&order.ID, &order.Username, &order.Email, &order.Phone,
 		&address, &items, &order.Total, &order.Status,
 		&order.ShippingCost, &order.Courier, &order.CourierService,
-		&order.SnapToken, &order.PaymentURL, &payment, &shipment, &refund, &order.CreatedAt,
+		&order.SnapToken, &order.PaymentURL, &payment, &shipment, &refund, &order.AccessToken, &order.CreatedAt,
 		&order.ShipmentAttempts, &lastRetry)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrderNotFound

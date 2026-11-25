@@ -267,10 +267,10 @@ Public, consumed by the storefront:
 | `POST` | `/cart` | price and availability check |
 | `POST` | `/shipping/rates` | courier quotes |
 | `POST` | `/orders` | create order and Snap transaction |
-| `GET` | `/orders/:id` | public order status |
-| `GET` | `/orders/:id/invoice.pdf` | invoice PDF |
-| `POST` | `/orders/:id/cancel` | cancel a pending order |
-| `GET`/`POST` | `/order/:id`, `/track` | HTML order and tracking pages |
+| `GET` | `/orders/:id` | minimal order status; requires the guest `?t=` token |
+| `GET` | `/orders/:id/invoice.pdf` | invoice PDF; requires the guest `?t=` token |
+| `POST` | `/orders/:id/cancel` | cancel a pending order; requires the guest `?t=` token |
+| `GET`/`POST` | `/order/:id`, `/track` | HTML order page (requires `?t=`) and tracking form |
 | `POST` | `/orders/notification` | Midtrans webhook |
 | `POST` | `/shipping/notification` | Biteship webhook |
 
@@ -317,6 +317,24 @@ route, so exhausting the order budget still lets the storefront load products.
   tests. Leave it on in production.
 - `GET /health` and the admin session endpoints are not limited; sign-in has its
   own limiter in the handler and a second one in nginx.
+
+## Guest order links
+
+Every order gets its own 256-bit token at checkout. It is stored with the order
+and returned once in the create response as `access_token`.
+
+- The order page, invoice PDF and cancel endpoint require it as `?t=`. Without
+  it the API answers `404` and the page says the link is invalid, so an order id
+  on its own reveals nothing.
+- `GET /orders/:id` with a valid token returns only `id`, `status`, `total` and
+  `created_at`; contact details, address, VA numbers and Snap URLs are not part
+  of the guest API. The dashboard reads the full order from `/admin/orders/:id`
+  behind the session.
+- Emails link to `/order/:id?t=...`. `/track` (order id + the email on the
+  order) verifies ownership and redirects to a working link, issuing a token for
+  orders created before tokens existed.
+- A leaked email link still opens the page for whoever has it; treat the full
+  link like a receipt. The order id alone is useless.
 
 ## Admin sign-in
 
@@ -423,8 +441,8 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 - Admin orders are paginated server-side (`limit`, `offset`, `total`). The
   product list still loads in full and filters in the browser; the catalog is
   small enough for that to be fine for now.
-- `GET /orders/:id` is a capability URL: anyone holding the link can read the
-  order, including customer details. UUIDs make guessing impractical, but the
-  link should still be treated as a secret.
+- A leaked guest link (with its `?t=` token) still shows the order to whoever
+  holds it. The id alone does not, and the guest JSON no longer contains contact
+  details.
 - Nothing is deployed by CI. The workflow validates a commit; shipping it is
   still a manual `rsync` plus service restart.
