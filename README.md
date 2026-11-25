@@ -122,8 +122,8 @@ previous run for that branch.
 - The backend job starts a disposable `postgres:16` service and exposes it as
   `TEST_DATABASE_URL`, so the settlement transaction and its concurrency run
   against real Postgres on every PR.
-- Artifacts are kept for 7 days. They are build outputs only; nothing is
-  deployed by this workflow.
+- Artifacts are kept for 7 days; the deploy workflow downloads the storefront
+  and admin builds from the CI run instead of rebuilding them.
 - `main` is protected by a repository ruleset (`main: require CI and pull
   requests`): changes must arrive through a pull request and the aggregate `CI`
   check must pass. Only the gate is required, so adding or reordering jobs does
@@ -131,6 +131,15 @@ previous run for that branch.
 - The ruleset has no bypass actors, so even the owner cannot push to `main`
   directly. If Actions is unavailable, disable the ruleset under
   **Settings → Rules**, merge, then re-enable it.
+
+## Continuous deployment
+
+`.github/workflows/deploy.yml` runs after a successful CI run on `main` and ships
+that exact commit to the VPS: the API is rebuilt and restarted with a health
+check and automatic rollback, then the storefront and admin builds from the CI
+run are rsynced to nginx. Deploys queue instead of overlapping, and the job is
+skipped until `DEPLOY_HOST` is configured. Setup, secrets, and rollback are in
+`deploy/README.md`.
 
 ## Daily workflow
 
@@ -408,6 +417,8 @@ All variables are documented in `.env.example`. The most important ones:
 A ready-to-use nginx setup lives in `deploy/`: one host, `shop.` and `admin.`
 subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 `deploy/README.md` for DNS, certificates, upload commands, and verification.
+Once the repository is configured, every green push to `main` deploys itself
+(see Continuous deployment).
 
 - The proxy strips `/api` and forwards `/order`, `/orders`, and `/track`
   untouched, because the Go app renders those pages.
@@ -444,5 +455,6 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 - A leaked guest link (with its `?t=` token) still shows the order to whoever
   holds it. The id alone does not, and the guest JSON no longer contains contact
   details.
-- Nothing is deployed by CI. The workflow validates a commit; shipping it is
-  still a manual `rsync` plus service restart.
+- Deployment targets a single VPS. There is no staging environment and no
+  automated frontend rollback: reverting the commit and letting CI deploy again
+  is the rollback path.
