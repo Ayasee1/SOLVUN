@@ -6,13 +6,19 @@ export type Product = {
   price: number
   stock: number
   is_available: boolean
+  weight_gram: number
   updated_at: string
 }
 
-// Only runtime fields can be changed from the admin UI. Name, description and
-// images are content owned by the catalog/*.json files.
-export type ProductUpdate = {
-  price?: number
-  stock?: number
-  is_available?: boolean
+// The database owns the catalog now: every field can be edited from the UI.
+export type ProductInput = {
+  name: string
+  description: string
+  images: string[]
+  price: number
+  stock: number
+  is_available: boolean
+  weight_gram: number
 }
+
+export type ProductUpdate = Partial<ProductInput>

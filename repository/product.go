@@ -19,6 +19,7 @@ var (
 type ProductRepository interface {
 	GetAll() ([]model.Product, error)
 	FindByID(id int) (*model.Product, error)
+	Create(input model.ProductInput) (*model.Product, error)
 	Delete(id int) (model.Product, error)
 	DecreaseStock(requested map[int]int) error
 	ReleaseStock(requested map[int]int) error
@@ -63,6 +64,40 @@ func (r *MemoryProductRepository) FindByID(id int) (*model.Product, error) {
 	}
 
 	return nil, ErrProductNotFound
+}
+
+// Create appends a product and assigns the next id.
+func (r *MemoryProductRepository) Create(input model.ProductInput) (*model.Product, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	maxID := 0
+	for _, product := range r.products {
+		if product.ID > maxID {
+			maxID = product.ID
+		}
+	}
+
+	available := true
+	if input.IsAvailable != nil {
+		available = *input.IsAvailable
+	}
+
+	product := model.Product{
+		ID:          maxID + 1,
+		Name:        input.Name,
+		Description: input.Description,
+		Images:      input.Images,
+		Price:       input.Price,
+		Stock:       input.Stock,
+		IsAvailable: available,
+		WeightGram:  input.WeightGram,
+		UpdatedAt:   time.Now(),
+	}
+	r.products = append(r.products, product)
+
+	result := product
+	return &result, nil
 }
 
 func (r *MemoryProductRepository) Delete(id int) (model.Product, error) {
@@ -139,8 +174,17 @@ func (r *MemoryProductRepository) UpdateProduct(id int, update model.ProductUpda
 	if update.Name != nil {
 		product.Name = *update.Name
 	}
+	if update.Description != nil {
+		product.Description = *update.Description
+	}
+	if update.Images != nil {
+		product.Images = *update.Images
+	}
 	if update.Price != nil {
 		product.Price = *update.Price
+	}
+	if update.WeightGram != nil {
+		product.WeightGram = *update.WeightGram
 	}
 	if update.Stock != nil {
 		product.Stock = *update.Stock

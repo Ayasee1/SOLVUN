@@ -75,6 +75,9 @@ type Config struct {
 	ShipmentRetryEnabled         bool
 	ShipmentRetryMaxAttempts     int
 	ShipmentRetryIntervalMinutes int
+	// MediaDir stores uploaded product images. It is served at /media and left
+	// empty to disable uploads.
+	MediaDir string
 	// BiteshipWebhookToken, when set, is required on the shipping webhook via
 	// ?token= or the X-Webhook-Token header. Biteship does not sign payloads, so
 	// this shared secret is the gate that keeps random callers out.
@@ -110,6 +113,7 @@ func Load() Config {
 		ShipmentRetryMaxAttempts:     getEnvInt("SHIPMENT_RETRY_MAX_ATTEMPTS", 5),
 		ShipmentRetryIntervalMinutes: getEnvInt("SHIPMENT_RETRY_INTERVAL_MINUTES", 10),
 
+		MediaDir:             strings.TrimSpace(os.Getenv("MEDIA_DIR")),
 		BiteshipWebhookToken: strings.TrimSpace(os.Getenv("BITESHIP_WEBHOOK_TOKEN")),
 
 		ResendAPIKey: os.Getenv("RESEND_API_KEY"),

@@ -28,6 +28,7 @@ export default defineConfig({
       '/order': api,
       '/orders': api,
       '/track': api,
+      '/media': api,
     },
   },
 })

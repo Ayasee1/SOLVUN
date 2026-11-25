@@ -58,6 +58,28 @@ func (r *PostgresProductRepository) FindByID(id int) (*model.Product, error) {
 		`SELECT `+productColumns+` FROM products WHERE id = $1`, id))
 }
 
+// Create inserts a product and lets the database assign the id.
+func (r *PostgresProductRepository) Create(input model.ProductInput) (*model.Product, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	images, err := json.Marshal(input.Images)
+	if err != nil {
+		return nil, err
+	}
+
+	available := true
+	if input.IsAvailable != nil {
+		available = *input.IsAvailable
+	}
+
+	return scanProduct(r.pool.QueryRow(ctx, `
+		INSERT INTO products (name, description, images, price, stock, is_available, weight_gram)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING `+productColumns,
+		input.Name, input.Description, images, input.Price, input.Stock, available, input.WeightGram))
+}
+
 func (r *PostgresProductRepository) Delete(id int) (model.Product, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
@@ -131,16 +153,28 @@ func (r *PostgresProductRepository) UpdateProduct(id int, update model.ProductUp
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
 
+	var images []byte
+	if update.Images != nil {
+		encoded, err := json.Marshal(*update.Images)
+		if err != nil {
+			return nil, err
+		}
+		images = encoded
+	}
+
 	return scanProduct(r.pool.QueryRow(ctx, `
 		UPDATE products SET
 			name = COALESCE($2, name),
-			price = COALESCE($3, price),
-			stock = COALESCE($4, stock),
-			is_available = COALESCE($5, CASE WHEN $4 IS NOT NULL THEN $4 > 0 ELSE is_available END),
+			description = COALESCE($3, description),
+			images = COALESCE($4, images),
+			price = COALESCE($5, price),
+			stock = COALESCE($6, stock),
+			is_available = COALESCE($7, CASE WHEN $6 IS NOT NULL THEN $6 > 0 ELSE is_available END),
+			weight_gram = COALESCE($8, weight_gram),
 			updated_at = now()
 		WHERE id = $1
 		RETURNING `+productColumns,
-		id, update.Name, update.Price, update.Stock, update.IsAvailable))
+		id, update.Name, update.Description, images, update.Price, update.Stock, update.IsAvailable, update.WeightGram))
 }
 
 // scanProduct works for both pgx.Row and pgx.Rows.

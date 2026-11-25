@@ -79,6 +79,8 @@ func SetupRoutes(app *fiber.App, ph *handler.ProductHandler, oh *handler.OrderHa
 	admin.Post("/orders/:id/shipment", oh.RetryShipment)
 	admin.Post("/orders/:id/refund", oh.RefundOrder)
 	admin.Get("/products", ph.GetAllProducts)
+	admin.Post("/products", ph.CreateProduct)
+	admin.Post("/products/images", ph.UploadProductImage)
 	admin.Patch("/products/:id", ph.UpdateProduct)
 	admin.Delete("/products/:id", ph.DeleteProduct)
 }

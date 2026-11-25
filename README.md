@@ -345,6 +345,24 @@ and returned once in the create response as `access_token`.
 - A leaked email link still opens the page for whoever has it; treat the full
   link like a receipt. The order id alone is useless.
 
+## Products
+
+Products are managed from the dashboard (Orders → Products → **Add product**):
+
+- name, description, price, stock, weight (for shipping quotes) and
+  availability;
+- images by upload (JPEG/PNG/WebP, up to 5 MB) or by pasting a `/path`/URL;
+- delete removes the row for good; old orders keep the item snapshot they were
+  created with.
+
+Uploaded files are written to `MEDIA_DIR/products` and served at `/media/...`,
+outside the web build, so a deploy never removes them. With `MEDIA_DIR` empty,
+uploads are disabled and the button explains why.
+
+The database owns the catalog now: `catalog/*.json` only seeds an empty table.
+Edits from the dashboard survive restarts, and deleting a seeded product does
+not resurrect it.
+
 ## Admin sign-in
 
 The admin is a single-operator dashboard, so credentials come from the
@@ -404,6 +422,7 @@ All variables are documented in `.env.example`. The most important ones:
 | `CORS_ORIGINS` | comma-separated allowed browser origins |
 | `TRUST_PROXY` | read client IP from `X-Forwarded-For` (nginx on host) |
 | `RATE_LIMIT_ENABLED` | per-client limits on public endpoints (default `true`) |
+| `MEDIA_DIR` | where uploaded product images live (served at `/media`); empty disables uploads |
 | `OPS_EMAIL` | recipient for the refund/shipment digest; empty disables it |
 | `OPS_ALERT_INTERVAL_HOURS` | digest interval (default 24) |
 | `OPS_ALERT_GRACE_MINUTES` | ignore paid orders younger than this (default 10) |
@@ -418,7 +437,8 @@ A ready-to-use nginx setup lives in `deploy/`: one host, `shop.` and `admin.`
 subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 `deploy/README.md` for DNS, certificates, upload commands, and verification.
 Once the repository is configured, every green push to `main` deploys itself
-(see Continuous deployment).
+(see Continuous deployment). Uploaded product images live under
+`/var/www/solvun/media` and are not part of a deploy; back that directory up.
 
 - The proxy strips `/api` and forwards `/order`, `/orders`, and `/track`
   untouched, because the Go app renders those pages.
@@ -450,8 +470,10 @@ Once the repository is configured, every green push to `main` deploys itself
   that the digest lists the order and the order page offers a manual retry.
   The retry delay is fixed, not exponential.
 - Admin orders are paginated server-side (`limit`, `offset`, `total`). The
-  product list still loads in full and filters in the browser; the catalog is
-  small enough for that to be fine for now.
+  product list still loads in full and filters in the browser; a small catalog
+  makes that fine for now.
+- Removing an image from a product only drops the URL; the uploaded file stays on
+  disk. There is no garbage collection for orphaned media yet.
 - A leaked guest link (with its `?t=` token) still shows the order to whoever
   holds it. The id alone does not, and the guest JSON no longer contains contact
   details.

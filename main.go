@@ -135,6 +135,7 @@ func main() {
 	}
 
 	productHandler := handler.NewProductHandler(productRepo)
+	productHandler.SetMediaDir(cfg.MediaDir)
 	orderHandler := handler.NewOrderHandler(productRepo, orderRepo, paymentGateway, mailer, shippingProvider, cfg.StoreBaseURL)
 	orderHandler.SetStoreOrigin(cfg.StoreOriginLat, cfg.StoreOriginLon, cfg.StoreOriginAddress)
 	// Enables Midtrans signature verification on the payment webhook.
@@ -183,8 +184,9 @@ func main() {
 		log.Println("shipment retrier disabled")
 	}
 
-	// Create a new Fiber instance
-	fiberConfig := fiber.Config{}
+	// Create a new Fiber instance. The body limit leaves room for a 5 MB image
+	// upload plus multipart overhead.
+	fiberConfig := fiber.Config{BodyLimit: 8 << 20}
 	if cfg.TrustProxy {
 		// nginx runs on the same host, so only loopback may claim a client IP.
 		// Trusting X-Forwarded-For from anywhere else would let a caller spoof
@@ -203,6 +205,15 @@ func main() {
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: strings.Join(cfg.AllowedOrigins(), ","),
 	}))
+
+	// Uploaded product images live outside the web build, so deploys never
+	// remove them. nginx serves the same directory in production.
+	if cfg.MediaDir != "" {
+		if err := os.MkdirAll(cfg.MediaDir, 0o755); err != nil {
+			log.Fatalf("media directory %q: %v", cfg.MediaDir, err)
+		}
+		app.Static("/media", cfg.MediaDir, fiber.Static{MaxAge: 30 * 24 * 60 * 60})
+	}
 
 	// Setup routes
 	routes.SetupRoutes(app, productHandler, orderHandler, shippingHandler, storeConfigHandler, adminAuthHandler, adminSessions, cfg.RateLimitEnabled)

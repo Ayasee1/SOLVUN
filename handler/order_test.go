@@ -141,6 +141,8 @@ func buildAppWithShipping(provider shipping.Provider) (*fiber.App, *fakeGateway,
 	app.Get("/products/:id", productHandler.GetProductByID)
 	app.Delete("/products/:id", productHandler.DeleteProduct)
 	app.Get("/admin/products", productHandler.GetAllProducts)
+	app.Post("/admin/products", productHandler.CreateProduct)
+	app.Post("/admin/products/images", productHandler.UploadProductImage)
 	app.Patch("/admin/products/:id", productHandler.UpdateProduct)
 	app.Post("/orders", orderHandler.CreateOrder)
 	app.Post("/orders/notification", orderHandler.Notification)

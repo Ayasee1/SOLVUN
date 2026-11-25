@@ -133,6 +133,9 @@ ADMIN_EMAIL=owner@example.com
 ADMIN_PASSWORD_HASH=<output of: go run ./cmd/hashpw>
 ADMIN_COOKIE_SECURE=true
 
+# Uploaded product images: served at /media by nginx, outside the web build.
+MEDIA_DIR=/var/www/solvun/media
+
 # Shared secret for the Biteship webhook (see step 6).
 BITESHIP_WEBHOOK_TOKEN=<random string>
 
@@ -226,7 +229,7 @@ systemctl --user enable golearn-staging
 loginctl enable-linger "$USER"
 
 # frontend roots writable by the deploy user (no sudo in the workflow)
-sudo mkdir -p /var/www/solvun/web /var/www/solvun/admin
+sudo mkdir -p /var/www/solvun/web /var/www/solvun/admin /var/www/solvun/media
 sudo chown -R "$USER": /var/www/solvun
 
 # key used by GitHub Actions
@@ -275,3 +278,6 @@ manual approval gate without changing the workflow.
   deploy, or rsync that build manually).
 - **Database**: migrations run at startup and are not rolled back
   automatically, so take a backup before deploying.
+- **Uploaded images**: `/var/www/solvun/media` is not in git and not part of a
+  deploy. Back it up with the database; a lost directory means broken image
+  URLs on existing products.
