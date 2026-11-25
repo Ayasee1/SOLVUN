@@ -1,0 +1,127 @@
+name: Deploy
+
+# Runs after the CI workflow finishes on main, in its own workflow so a later
+# push cancelling a CI run can never cancel a deploy halfway through.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read # download the build artifacts from the CI run
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false # queue deploys, never interrupt one
+
+jobs:
+  deploy:
+    name: Deploy (production)
+    if: github.event.workflow_run.conclusion == 'success' && vars.DEPLOY_HOST != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Checkout the tested commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Download storefront build
+        uses: actions/download-artifact@v8
+        with:
+          name: storefront-dist
+          path: web/dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download admin build
+        uses: actions/download-artifact@v8
+        with:
+          name: admin-dist
+          path: admin/dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is not set for this repository or the production environment"
+              exit 1
+            fi
+          done
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      # The API goes first so the frontends never point at endpoints that do not
+      # exist yet. The script rolls back and exits non-zero if /health fails.
+      - name: Deploy API
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_PATH:-}" ]; then
+            echo "::error::DEPLOY_PATH is not set"
+            exit 1
+          fi
+
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash -s -- '${{ github.event.workflow_run.head_sha }}' '$DEPLOY_PATH'" \
+            < deploy/remote-deploy.sh
+
+      - name: Deploy storefront
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_WEB_ROOT: ${{ vars.DEPLOY_WEB_ROOT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_WEB_ROOT:-}" ]; then
+            echo "::error::DEPLOY_WEB_ROOT is not set"
+            exit 1
+          fi
+
+          rsync -az --delete --chmod=D755,F644 \
+            -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes" \
+            web/dist/ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_WEB_ROOT/"
+
+      - name: Deploy admin
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_ADMIN_ROOT: ${{ vars.DEPLOY_ADMIN_ROOT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_ADMIN_ROOT:-}" ]; then
+            echo "::error::DEPLOY_ADMIN_ROOT is not set"
+            exit 1
+          fi
+
+          rsync -az --delete --chmod=D755,F644 \
+            -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes" \
+            admin/dist/ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ADMIN_ROOT/"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed"
+            echo
+            echo "- commit: \`${{ github.event.workflow_run.head_sha }}\`"
+            echo "- CI run: ${{ github.event.workflow_run.html_url }}"
+          } >> "$GITHUB_STEP_SUMMARY"

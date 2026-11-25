@@ -194,9 +194,84 @@ deny all;
 Keep the app-level session auth regardless: the allowlist is a second layer,
 not a replacement.
 
+## Continuous deployment
+
+`.github/workflows/deploy.yml` deploys every commit that passes CI on `main`.
+
+1. The CI workflow finishes successfully on a push to `main`.
+2. The deploy workflow checks out that exact commit and downloads the
+   `storefront-dist` and `admin-dist` artifacts from the CI run.
+3. It runs `deploy/remote-deploy.sh <sha> <path>` over SSH. The script fetches
+   the commit, checks `gofmt` and `go vet`, builds, restarts the user service and
+   waits for `/health`.
+4. If health fails, the script restores the previous commit **and** the previous
+   binary, restarts and exits non-zero. The frontends are then left untouched.
+5. Only after a healthy API does it rsync `web/dist` and `admin/dist` to the
+   nginx roots.
+6. Deploys are serialized (`concurrency: deploy-production`,
+   `cancel-in-progress: false`): a new push queues behind a running deploy
+   instead of interrupting it.
+
+The job only runs when `DEPLOY_HOST` is set, so it stays skipped (green) until
+the repository is configured.
+
+### One-time setup on the VPS
+
+```bash
+# backend-only clone; do not run bun install here
+git clone https://github.com/Ayasee1/SOLVUN.git ~/developer/golearn-staging
+
+# the user service must exist and start at boot without a login session
+systemctl --user enable golearn-staging
+loginctl enable-linger "$USER"
+
+# frontend roots writable by the deploy user (no sudo in the workflow)
+sudo mkdir -p /var/www/solvun/web /var/www/solvun/admin
+sudo chown -R "$USER": /var/www/solvun
+
+# key used by GitHub Actions
+ssh-keygen -t ed25519 -C github-actions-deploy -f ~/.ssh/deploy_key -N ""
+cat ~/.ssh/deploy_key.pub >> ~/.ssh/authorized_keys
+
+# pinned host key
+ssh-keyscan -H <server-host>
+```
+
+The service unit's `ExecStart` must point at the `golearn` binary inside the
+clone (the script rebuilds it in place).
+
+### GitHub settings
+
+Create the environment **production** (Settings → Environments). Set the
+**repository** variables (Settings → Secrets and variables → Actions →
+Variables) — the workflow's `if` reads `DEPLOY_HOST` from there, so it must not
+live only in the environment:
+
+| Variable | Example |
+| --- | --- |
+| `DEPLOY_HOST` | `vps.example.com` |
+| `DEPLOY_USER` | `ikhsan` |
+| `DEPLOY_PATH` | `/home/ikhsan/developer/golearn-staging` |
+| `DEPLOY_WEB_ROOT` | `/var/www/solvun/web` |
+| `DEPLOY_ADMIN_ROOT` | `/var/www/solvun/admin` |
+
+Secrets (repository or environment level):
+
+| Secret | Contents |
+| --- | --- |
+| `DEPLOY_SSH_KEY` | the private key from `~/.ssh/deploy_key` |
+| `DEPLOY_KNOWN_HOSTS` | output of `ssh-keyscan -H <server-host>` |
+
+Adding required reviewers to the environment turns the automatic deploy into a
+manual approval gate without changing the workflow.
+
 ## Rollback
 
-- **Frontends**: re-run the `rsync` from the previous commit's build.
-- **API**: `git checkout --detach <previous-sha>` and restart the service.
+- **API during a deploy**: automatic. The script restores the previous commit
+  and binary when `/health` fails, then exits non-zero.
+- **API after the fact**: `bash deploy/remote-deploy.sh <previous-sha> <path>`
+  on the server, or run the same command locally over SSH.
+- **Frontends**: redeploy the previous commit (revert it on `main` and let CI
+  deploy, or rsync that build manually).
 - **Database**: migrations run at startup and are not rolled back
   automatically, so take a backup before deploying.
