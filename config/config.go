@@ -10,7 +10,6 @@ type Config struct {
 	Port              string
 	DatabaseURL       string
 	CatalogDir        string
-	AdminAPIKey       string
 	MidtransServerKey string
 	MidtransClientKey string
 	MidtransEnv       string
@@ -47,6 +46,15 @@ type Config struct {
 	OrderPendingTTLMinutes int
 	// OrderSweepIntervalSeconds is how often the sweeper looks for stale orders.
 	OrderSweepIntervalSeconds int
+	// AdminEmail and AdminPasswordHash are the single operator credentials for
+	// /admin. AdminPasswordHash must be a bcrypt hash; see cmd/hashpw.
+	AdminEmail        string
+	AdminPasswordHash string
+	// AdminSessionTTLMinutes is how long an admin session cookie stays valid.
+	AdminSessionTTLMinutes int
+	// AdminCookieSecure marks the session cookie Secure. Keep it true in
+	// production; browsers still accept Secure cookies on http://localhost.
+	AdminCookieSecure bool
 }
 
 // Load reads configuration from the environment, falling back to safe defaults.
@@ -55,7 +63,6 @@ func Load() Config {
 		Port:                  getEnv("PORT", "3000"),
 		DatabaseURL:           os.Getenv("DATABASE_URL"),
 		CatalogDir:            getEnv("CATALOG_DIR", "catalog"),
-		AdminAPIKey:           os.Getenv("ADMIN_API_KEY"),
 		MidtransServerKey:     os.Getenv("MIDTRANS_SERVER_KEY"),
 		MidtransClientKey:     os.Getenv("MIDTRANS_CLIENT_KEY"),
 		MidtransEnv:           getEnv("MIDTRANS_ENV", "sandbox"),
@@ -63,12 +70,18 @@ func Load() Config {
 
 		OrderPendingTTLMinutes:    getEnvInt("ORDER_PENDING_TTL_MINUTES", 20),
 		OrderSweepIntervalSeconds: getEnvInt("ORDER_SWEEP_INTERVAL_SECONDS", 60),
-		ResendAPIKey:              os.Getenv("RESEND_API_KEY"),
-		SMTPHost:                  os.Getenv("SMTP_HOST"),
-		SMTPPort:                  getEnv("SMTP_PORT", "587"),
-		SMTPUser:                  os.Getenv("SMTP_USER"),
-		SMTPPass:                  os.Getenv("SMTP_PASS"),
-		MailFrom:                  getEnv("MAIL_FROM", "Solvun <no-reply@solvun.local>"),
+
+		AdminEmail:             strings.TrimSpace(os.Getenv("ADMIN_EMAIL")),
+		AdminPasswordHash:      strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_HASH")),
+		AdminSessionTTLMinutes: getEnvInt("ADMIN_SESSION_TTL_MINUTES", 720),
+		AdminCookieSecure:      getEnvBool("ADMIN_COOKIE_SECURE", true),
+
+		ResendAPIKey: os.Getenv("RESEND_API_KEY"),
+		SMTPHost:     os.Getenv("SMTP_HOST"),
+		SMTPPort:     getEnv("SMTP_PORT", "587"),
+		SMTPUser:     os.Getenv("SMTP_USER"),
+		SMTPPass:     os.Getenv("SMTP_PASS"),
+		MailFrom:     getEnv("MAIL_FROM", "Solvun <no-reply@solvun.local>"),
 
 		ShippingProvider:      os.Getenv("SHIPPING_PROVIDER"),
 		ShippingFlatRates:     os.Getenv("SHIPPING_FLAT_RATES"),
@@ -109,6 +122,22 @@ func getEnvInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 // AllowedOrigins returns the configured CORS origins, or ["*"] when unset.

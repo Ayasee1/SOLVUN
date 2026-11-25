@@ -5,6 +5,7 @@ import { SignOutDialog } from './sign-out-dialog'
 
 const navigate = vi.fn()
 const reset = vi.fn()
+const signOutMock = vi.fn()
 
 const MOCK_HREF = 'https://app.test/dashboard?tab=1'
 
@@ -12,6 +13,10 @@ vi.mock('@/stores/auth-store', () => ({
   useAuthStore: () => ({
     auth: { reset },
   }),
+}))
+
+vi.mock('@/features/auth/api', () => ({
+  signOut: () => signOutMock(),
 }))
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -26,16 +31,35 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 describe('SignOutDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    signOutMock.mockResolvedValue(undefined)
   })
 
-  it('calls auth.reset and navigates to sign-in with current location as redirect', async () => {
+  it('revokes the session, resets auth, and redirects to sign-in', async () => {
     const { getByRole } = await render(
       <SignOutDialog open onOpenChange={vi.fn()} />
     )
 
     await userEvent.click(getByRole('button', { name: /^Sign out$/i }))
 
+    await vi.waitFor(() => expect(signOutMock).toHaveBeenCalledOnce())
     expect(reset).toHaveBeenCalledOnce()
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/sign-in',
+      search: { redirect: MOCK_HREF },
+      replace: true,
+    })
+  })
+
+  it('still signs out locally when the API call fails', async () => {
+    signOutMock.mockRejectedValueOnce(new Error('offline'))
+
+    const { getByRole } = await render(
+      <SignOutDialog open onOpenChange={vi.fn()} />
+    )
+
+    await userEvent.click(getByRole('button', { name: /^Sign out$/i }))
+
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledOnce())
     expect(navigate).toHaveBeenCalledWith({
       to: '/sign-in',
       search: { redirect: MOCK_HREF },

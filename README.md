@@ -21,14 +21,18 @@ React admin dashboard.
 
 ```bash
 cp .env.example .env
-# edit .env: DATABASE_URL, ADMIN_API_KEY, Midtrans keys, shipping, email
+# edit .env: DATABASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD_HASH, Midtrans keys,
+# shipping, email
 ```
 
-Generate an admin key with:
+Create the admin password hash:
 
 ```bash
-openssl rand -hex 24
+go run ./cmd/hashpw          # prompts for the password
 ```
+
+Copy the printed bcrypt hash into `ADMIN_PASSWORD_HASH`. Admin sign-in is
+disabled while `ADMIN_EMAIL` or `ADMIN_PASSWORD_HASH` is empty.
 
 ### Run the API
 
@@ -55,8 +59,12 @@ The dev server runs on `http://localhost:5174` and proxies `/api`, `/order`,
 ```bash
 cd admin
 bun install
-VITE_ADMIN_API_KEY=<same value as ADMIN_API_KEY> bun run dev
+bun run dev
 ```
+
+Sign in with the `ADMIN_EMAIL` / password pair configured on the API. The
+dashboard stores nothing in the browser: the API sets an HttpOnly session
+cookie and the router asks `GET /admin/session` whether it is still valid.
 
 ## Tests
 
@@ -116,13 +124,31 @@ All variables are documented in `.env.example`. The most important ones:
 | Variable                      | Purpose                                              |
 | ----------------------------- | ---------------------------------------------------- |
 | `DATABASE_URL`                | Postgres DSN; empty uses in-memory repositories       |
-| `ADMIN_API_KEY`               | `X-API-Key` for `/admin/*`; empty rejects all calls   |
+| `ADMIN_EMAIL`                 | Operator email for `/admin`; empty disables sign-in   |
+| `ADMIN_PASSWORD_HASH`         | bcrypt hash from `go run ./cmd/hashpw`               |
+| `ADMIN_SESSION_TTL_MINUTES`   | Admin session lifetime (default 720)                 |
+| `ADMIN_COOKIE_SECURE`         | Mark the session cookie `Secure` (default `true`)    |
 | `MIDTRANS_*`                  | Snap client/server keys and environment               |
 | `ORDER_PENDING_TTL_MINUTES`   | How long unpaid orders keep stock reserved (default 20) |
 | `ORDER_SWEEP_INTERVAL_SECONDS`| Sweeper interval (default 60)                         |
 | `SHIPPING_PROVIDER`           | `biteship`, `flat`, or `disabled`                     |
 | `STORE_BASE_URL`              | Public store URL used in payment redirects and emails |
 | `CORS_ORIGINS`                | Comma-separated allowed browser origins               |
+
+## Admin sign-in
+
+The admin is a single-operator dashboard, so credentials come from the
+environment instead of a user table.
+
+1. `POST /admin/session` with `{email, password}` verifies the bcrypt hash and
+   sets `solvun_admin_session`: `HttpOnly`, `SameSite=Lax`, `Secure` by default.
+2. `GET /admin/session` tells the dashboard whether the cookie is still valid.
+3. `DELETE /admin/session` revokes the token and clears the cookie.
+4. Every `/admin/*` route requires a live session. There is no API key in the
+   frontend bundle.
+
+Sessions are stored in memory, so restarting the API signs the operator out.
+Failed sign-ins are limited to 5 attempts per client per 15 minutes.
 
 ## Deployment notes
 
@@ -136,8 +162,7 @@ All variables are documented in `.env.example`. The most important ones:
 
 ## Known gaps
 
-- Admin sign-in is still a mock; the admin API key is compiled into the
-  frontend bundle. Replace it with server-side auth before exposing the admin
-  publicly.
-- No rate limiting on public endpoints yet.
+- Admin sessions live in memory: a restart signs the operator out, and running
+  more than one API instance would require a shared session store.
+- No rate limiting on public endpoints yet (only admin sign-in is limited).
 - Admin lists load every order/product (no pagination).
