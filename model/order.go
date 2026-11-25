@@ -179,6 +179,12 @@ type UserOrder struct {
 	Payment        *PaymentInfo  `json:"payment,omitempty"`
 	Shipment       *ShipmentInfo `json:"shipment,omitempty"`
 	Refund         *RefundInfo   `json:"refund,omitempty"`
+	// AccessToken is the guest secret that authorises the order page, invoice
+	// and cancel endpoint. It is never returned by read APIs.
+	AccessToken string `json:"-"`
+	// AccessTokenIssued is set only on the create response, so the storefront can
+	// build the redirect without a second request.
+	AccessTokenIssued string `json:"access_token,omitempty"`
 	// ShipmentAttempts counts how many times the API tried to create the provider
 	// shipment automatically, so a broken order cannot be retried forever.
 	ShipmentAttempts      int        `json:"shipment_attempts,omitempty"`

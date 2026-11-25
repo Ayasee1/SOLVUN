@@ -146,6 +146,7 @@ func buildAppWithShipping(provider shipping.Provider) (*fiber.App, *fakeGateway,
 	app.Post("/orders/notification", orderHandler.Notification)
 	app.Get("/orders", orderHandler.GetOrders)
 	app.Get("/orders/:id", orderHandler.GetOrderByID)
+	app.Get("/admin/orders/:id", orderHandler.AdminGetOrderByID)
 	app.Get("/orders/:id/invoice.pdf", orderHandler.DownloadInvoice)
 	app.Post("/orders/:id/cancel", orderHandler.CancelOrder)
 	app.Post("/shipping/notification", orderHandler.ShippingNotification)
@@ -221,18 +222,23 @@ func postOrder(t *testing.T, app *fiber.App, item model.Item) (*http.Response, m
 	return resp, order
 }
 
-func getOrder(t *testing.T, app *fiber.App, id uuid.UUID) model.UserOrder {
+func getOrder(t *testing.T, app *fiber.App, order model.UserOrder) model.UserOrder {
 	t.Helper()
 
-	req, _ := http.NewRequest(http.MethodGet, "/orders/"+id.String(), nil)
+	path := "/admin/orders/" + order.ID.String()
+	req, _ := http.NewRequest(http.MethodGet, path, nil)
 	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var order model.UserOrder
-	json.NewDecoder(resp.Body).Decode(&order)
-	return order
+	var got model.UserOrder
+	json.NewDecoder(resp.Body).Decode(&got)
+	return got
+}
+
+func cancelURL(order model.UserOrder) string {
+	return "/orders/" + order.ID.String() + "/cancel?t=" + url.QueryEscape(order.AccessTokenIssued)
 }
 
 func notify(t *testing.T, app *fiber.App, id uuid.UUID) *http.Response {
@@ -350,7 +356,19 @@ func TestGetOrderByID(t *testing.T) {
 
 	_, created := postOrder(t, app, model.Item{ID: 1, Qty: 1})
 
+	// The id alone reveals nothing.
 	req, _ := http.NewRequest(http.MethodGet, "/orders/"+created.ID.String(), nil)
+	anonymous, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anonymous.StatusCode != fiber.StatusNotFound {
+		t.Fatalf("anonymous status = %d, want 404", anonymous.StatusCode)
+	}
+
+	// With the guest token only the minimal status is returned.
+	path := "/orders/" + created.ID.String() + "?t=" + url.QueryEscape(created.AccessTokenIssued)
+	req, _ = http.NewRequest(http.MethodGet, path, nil)
 	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
@@ -359,10 +377,23 @@ func TestGetOrderByID(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 
-	var got model.UserOrder
-	json.NewDecoder(resp.Body).Decode(&got)
-	if got.ID != created.ID {
-		t.Errorf("id = %v, want %v", got.ID, created.ID)
+	body, _ := io.ReadAll(resp.Body)
+	var got struct {
+		ID     uuid.UUID         `json:"id"`
+		Status model.OrderStatus `json:"status"`
+		Total  int               `json:"total"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID != created.ID || got.Status != model.OrderStatusPending || got.Total != created.Total {
+		t.Errorf("got = %+v", got)
+	}
+
+	for _, leaked := range []string{created.Email, created.Phone, created.Address.Street} {
+		if strings.Contains(string(body), leaked) {
+			t.Errorf("public order response leaks %q", leaked)
+		}
 	}
 }
 
@@ -372,7 +403,7 @@ func TestGetOrdersFilterByStatus(t *testing.T) {
 	_, first := postOrder(t, app, model.Item{ID: 1, Qty: 1})
 	postOrder(t, app, model.Item{ID: 1, Qty: 1})
 
-	cancelReq, _ := http.NewRequest(http.MethodPost, "/orders/"+first.ID.String()+"/cancel", nil)
+	cancelReq, _ := http.NewRequest(http.MethodPost, cancelURL(first), nil)
 	if _, err := app.Test(cancelReq); err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +475,7 @@ func TestGetOrderStats(t *testing.T) {
 
 	_, first := postOrder(t, app, model.Item{ID: 1, Qty: 1})
 	postOrder(t, app, model.Item{ID: 1, Qty: 1})
-	cancelReq, _ := http.NewRequest(http.MethodPost, "/orders/"+first.ID.String()+"/cancel", nil)
+	cancelReq, _ := http.NewRequest(http.MethodPost, cancelURL(first), nil)
 	if _, err := app.Test(cancelReq); err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +544,7 @@ func TestCancelOrderReleasesStock(t *testing.T) {
 		t.Fatalf("stock after order = %d, want 8", got)
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, "/orders/"+created.ID.String()+"/cancel", nil)
+	req, _ := http.NewRequest(http.MethodPost, cancelURL(created), nil)
 	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
@@ -532,7 +563,7 @@ func TestCancelOrderReleasesStock(t *testing.T) {
 	}
 
 	// cancelling twice must not release the stock again
-	req2, _ := http.NewRequest(http.MethodPost, "/orders/"+created.ID.String()+"/cancel", nil)
+	req2, _ := http.NewRequest(http.MethodPost, cancelURL(created), nil)
 	resp2, err := app.Test(req2)
 	if err != nil {
 		t.Fatal(err)
@@ -564,7 +595,7 @@ func TestNotificationSettlementMarksPaid(t *testing.T) {
 		t.Fatalf("notification status = %d, want 200", resp.StatusCode)
 	}
 
-	got := getOrder(t, app, created.ID)
+	got := getOrder(t, app, created)
 	if got.Status != model.OrderStatusPaid {
 		t.Errorf("status = %q, want %q", got.Status, model.OrderStatusPaid)
 	}
@@ -586,7 +617,7 @@ func TestLatePaymentAfterCancelIsAccepted(t *testing.T) {
 	_, created := postOrder(t, app, model.Item{ID: 1, Qty: 2}) // stock 10 -> 8
 
 	// cancelling releases the stock back to 10
-	cancelReq, _ := http.NewRequest(http.MethodPost, "/orders/"+created.ID.String()+"/cancel", nil)
+	cancelReq, _ := http.NewRequest(http.MethodPost, cancelURL(created), nil)
 	if resp, err := app.Test(cancelReq); err != nil || resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("cancel failed: %v", err)
 	}
@@ -600,7 +631,7 @@ func TestLatePaymentAfterCancelIsAccepted(t *testing.T) {
 		t.Fatalf("notification status = %d, want 200", resp.StatusCode)
 	}
 
-	got := getOrder(t, app, created.ID)
+	got := getOrder(t, app, created)
 	if got.Status != model.OrderStatusPaid {
 		t.Errorf("status = %q, want %q", got.Status, model.OrderStatusPaid)
 	}
@@ -613,7 +644,7 @@ func TestLatePaymentWithoutStockNeedsRefund(t *testing.T) {
 	app, gw := setupApp()
 
 	_, first := postOrder(t, app, model.Item{ID: 1, Qty: 10}) // stock 10 -> 0
-	cancelReq, _ := http.NewRequest(http.MethodPost, "/orders/"+first.ID.String()+"/cancel", nil)
+	cancelReq, _ := http.NewRequest(http.MethodPost, cancelURL(first), nil)
 	if _, err := app.Test(cancelReq); err != nil {
 		t.Fatal(err)
 	}
@@ -629,7 +660,7 @@ func TestLatePaymentWithoutStockNeedsRefund(t *testing.T) {
 		t.Fatalf("notification status = %d, want 200", resp.StatusCode)
 	}
 
-	got := getOrder(t, app, first.ID)
+	got := getOrder(t, app, first)
 	if got.Status != model.OrderStatusNeedsRefund {
 		t.Errorf("status = %q, want %q", got.Status, model.OrderStatusNeedsRefund)
 	}
@@ -640,7 +671,18 @@ func TestDownloadInvoice(t *testing.T) {
 
 	_, created := postOrder(t, app, model.Item{ID: 1, Qty: 1})
 
+	// Without the guest token the receipt is not available.
 	req, _ := http.NewRequest(http.MethodGet, "/orders/"+created.ID.String()+"/invoice.pdf", nil)
+	anonymous, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anonymous.StatusCode != fiber.StatusNotFound {
+		t.Fatalf("anonymous invoice status = %d, want 404", anonymous.StatusCode)
+	}
+
+	path := "/orders/" + created.ID.String() + "/invoice.pdf?t=" + url.QueryEscape(created.AccessTokenIssued)
+	req, _ = http.NewRequest(http.MethodGet, path, nil)
 	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
@@ -649,15 +691,10 @@ func TestDownloadInvoice(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "application/pdf" {
-		t.Errorf("content-type = %q, want application/pdf", ct)
+		t.Errorf("content type = %q", ct)
 	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.HasPrefix(body, []byte("%PDF")) {
-		t.Errorf("response is not a PDF, got %q", body[:minInt(4, len(body))])
+	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, "invoice-") {
+		t.Errorf("content disposition = %q", cd)
 	}
 }
 
@@ -793,7 +830,7 @@ func TestOrderPageAndTrack(t *testing.T) {
 	_, created := postOrder(t, app, model.Item{ID: 1, Qty: 1})
 
 	// the public order page renders the order + status
-	req, _ := http.NewRequest(http.MethodGet, "/order/"+created.ID.String(), nil)
+	req, _ := http.NewRequest(http.MethodGet, "/order/"+created.ID.String()+"?t="+url.QueryEscape(created.AccessTokenIssued), nil)
 	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
@@ -828,7 +865,8 @@ func TestOrderPageAndTrack(t *testing.T) {
 	}
 
 	// matching email -> redirected to the order page
-	if resp := submit("b@mail.com"); resp.Header.Get("Location") != "/order/"+created.ID.String() {
+	wantLocation := "/order/" + created.ID.String() + "?t=" + url.QueryEscape(created.AccessTokenIssued)
+	if resp := submit("b@mail.com"); resp.Header.Get("Location") != wantLocation {
 		t.Errorf("location = %q, want the order page", resp.Header.Get("Location"))
 	}
 
@@ -924,7 +962,7 @@ func TestShippingNotificationUpdatesStatus(t *testing.T) {
 		t.Fatalf("notification status = %d, want 200", resp.StatusCode)
 	}
 
-	got := getOrder(t, app, created.ID)
+	got := getOrder(t, app, created)
 	if got.Shipment == nil || got.Shipment.Status != "picked" {
 		t.Fatalf("shipment = %+v, want status picked", got.Shipment)
 	}
@@ -981,7 +1019,7 @@ func TestPaidOrderCreatesShipment(t *testing.T) {
 		t.Errorf("items = %+v, want the snapshotted weight", req.Items)
 	}
 
-	got := getOrder(t, app, created.ID)
+	got := getOrder(t, app, created)
 	if got.Shipment == nil {
 		t.Fatal("shipment was not stored on the order")
 	}
@@ -1004,7 +1042,7 @@ func TestShipmentFailureKeepsOrderPaid(t *testing.T) {
 		t.Fatalf("notification status = %d, want 200", resp.StatusCode)
 	}
 
-	got := getOrder(t, app, created.ID)
+	got := getOrder(t, app, created)
 	if got.Status != model.OrderStatusPaid {
 		t.Errorf("status = %q, want paid (shipment failure must not undo payment)", got.Status)
 	}
@@ -1061,7 +1099,7 @@ func TestNotificationAmountMismatchIsRejected(t *testing.T) {
 		t.Fatalf("notification status = %d, want 400", resp.StatusCode)
 	}
 
-	got := getOrder(t, app, created.ID)
+	got := getOrder(t, app, created)
 	if got.Status != model.OrderStatusPending {
 		t.Errorf("status = %q, want %q", got.Status, model.OrderStatusPending)
 	}
@@ -1077,7 +1115,7 @@ func TestNotificationExpireReleasesStock(t *testing.T) {
 		t.Fatalf("notification status = %d, want 200", resp.StatusCode)
 	}
 
-	got := getOrder(t, app, created.ID)
+	got := getOrder(t, app, created)
 	if got.Status != model.OrderStatusExpired {
 		t.Errorf("status = %q, want %q", got.Status, model.OrderStatusExpired)
 	}

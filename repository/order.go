@@ -76,6 +76,7 @@ type OrderRepository interface {
 	// touched. That is what keeps a crash from leaving a paid order without
 	// stock (or stock without a paid order).
 	SettlePaid(id uuid.UUID, from model.OrderStatus, info model.PaymentInfo, stock map[int]int, reserveStock bool) (*model.UserOrder, SettleOutcome, error)
+	SetAccessToken(id uuid.UUID, token string) error
 	SetShipment(id uuid.UUID, info model.ShipmentInfo) error
 	FindByShipmentProviderID(providerID string) (*model.UserOrder, error)
 	Delete(id uuid.UUID) (model.UserOrder, error)
@@ -381,6 +382,20 @@ func (r *MemoryOrderRepository) TransitionStatusWithRefund(id uuid.UUID, from, t
 	}
 
 	return nil, false, ErrOrderNotFound
+}
+
+// SetAccessToken stores the guest access token for an order.
+func (r *MemoryOrderRepository) SetAccessToken(id uuid.UUID, token string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.orders {
+		if r.orders[i].ID == id {
+			r.orders[i].AccessToken = token
+			return nil
+		}
+	}
+	return ErrOrderNotFound
 }
 
 // SetShipment stores the provider shipment details on the order.

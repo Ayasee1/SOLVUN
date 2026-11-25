@@ -1,14 +1,17 @@
 package handler
 
 import (
+	"crypto/rand"
 	"crypto/sha512"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"math"
 	"net/mail"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -91,9 +94,33 @@ func (h *OrderHandler) SetShippingWebhookToken(token string) {
 	h.shippingWebhookToken = token
 }
 
-// orderPageURL is the public page the customer can open to follow the order.
-func (h *OrderHandler) orderPageURL(id uuid.UUID) string {
-	return h.storeBaseURL + "/order/" + id.String()
+// newAccessToken returns the guest secret used in order links.
+func newAccessToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// orderPageURL is the public page the customer can open to follow the order. The
+// token is what authorises the page: the order id alone reveals nothing.
+func (h *OrderHandler) orderPageURL(order model.UserOrder) string {
+	return h.storeBaseURL + "/order/" + order.ID.String() + "?t=" + url.QueryEscape(order.AccessToken)
+}
+
+// invoiceURL is the guest download link for the invoice PDF.
+func (h *OrderHandler) invoiceURL(order model.UserOrder) string {
+	return h.storeBaseURL + "/orders/" + order.ID.String() + "/invoice.pdf?t=" + url.QueryEscape(order.AccessToken)
+}
+
+// orderTokenValid reports whether the request carries the order's guest token.
+func (h *OrderHandler) orderTokenValid(c *fiber.Ctx, order *model.UserOrder) bool {
+	provided := c.Query("t")
+	if provided == "" || order.AccessToken == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(order.AccessToken)) == 1
 }
 
 // createOrderRequest is the explicit input accepted from the client. Notably
@@ -232,6 +259,17 @@ func (h *OrderHandler) CreateOrder(c *fiber.Ctx) error {
 	}
 
 	order.ID = uuid.New()
+
+	accessToken, err := newAccessToken()
+	if err != nil {
+		_ = h.productRepo.ReleaseStock(requested)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to create order",
+		})
+	}
+	order.AccessToken = accessToken
+	order.AccessTokenIssued = accessToken
+
 	order.Total = total
 	order.Status = model.OrderStatusPending
 	order.CreatedAt = time.Now()
@@ -261,7 +299,7 @@ func (h *OrderHandler) CreateOrder(c *fiber.Ctx) error {
 	}
 
 	// email failures must not break the request
-	if err := h.mailer.Send(notification.OrderReceivedEmail(order, h.orderPageURL(order.ID))); err != nil {
+	if err := h.mailer.Send(notification.OrderReceivedEmail(order, h.orderPageURL(order))); err != nil {
 		log.Printf("failed to send order email for %s: %v", order.ID, err)
 	}
 
@@ -595,7 +633,7 @@ func (h *OrderHandler) lockShipment(id uuid.UUID) func() {
 
 // sendPaidEmail sends the payment confirmation with the invoice PDF attached.
 func (h *OrderHandler) sendPaidEmail(order model.UserOrder) {
-	msg := notification.OrderPaidEmail(order, h.orderPageURL(order.ID))
+	msg := notification.OrderPaidEmail(order, h.orderPageURL(order))
 
 	if pdf, err := invoice.Generate(order); err != nil {
 		log.Printf("failed to build invoice for %s: %v", order.ID, err)
@@ -691,7 +729,7 @@ func (h *OrderHandler) ShippingNotification(c *fiber.Ctx) error {
 	// notify the customer once, when the parcel is delivered
 	if previousStatus != "delivered" && shipment.Status == "delivered" {
 		order.Shipment = &info
-		if err := h.mailer.Send(notification.OrderDeliveredEmail(*order, h.orderPageURL(order.ID))); err != nil {
+		if err := h.mailer.Send(notification.OrderDeliveredEmail(*order, h.orderPageURL(*order))); err != nil {
 			log.Printf("failed to send delivered email for %s: %v", order.ID, err)
 		}
 	}
@@ -833,8 +871,18 @@ func toShipmentEvents(events []shipping.ShipmentEvent) []model.ShipmentEvent {
 	return out
 }
 
-// DownloadInvoice serves the invoice PDF (guest link, protected by the order UUID).
+// DownloadInvoice serves the invoice PDF for the guest link. The order token is
+// required, so a leaked order id does not expose the receipt.
 func (h *OrderHandler) DownloadInvoice(c *fiber.Ctx) error {
+	return h.serveInvoice(c, true)
+}
+
+// AdminInvoice serves the same PDF to a signed-in operator.
+func (h *OrderHandler) AdminInvoice(c *fiber.Ctx) error {
+	return h.serveInvoice(c, false)
+}
+
+func (h *OrderHandler) serveInvoice(c *fiber.Ctx, requireToken bool) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -851,6 +899,12 @@ func (h *OrderHandler) DownloadInvoice(c *fiber.Ctx) error {
 		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Internal server error",
+		})
+	}
+
+	if requireToken && !h.orderTokenValid(c, order) {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "Order not found",
 		})
 	}
 
@@ -939,8 +993,54 @@ func (h *OrderHandler) GetStats(c *fiber.Ctx) error {
 	})
 }
 
-// get order by id handler
+// publicOrder is the minimal shape a guest may read with the order token. It
+// deliberately excludes contact details, address, payment credentials and the
+// Snap URLs.
+type publicOrder struct {
+	ID        uuid.UUID         `json:"id"`
+	Status    model.OrderStatus `json:"status"`
+	Total     int               `json:"total"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// GetOrderByID is the guest order status endpoint. The id alone is not enough:
+// the request must carry the token issued at checkout.
 func (h *OrderHandler) GetOrderByID(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid order id",
+		})
+	}
+
+	order, err := h.orderRepo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error": "Order not found",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Internal server error",
+		})
+	}
+
+	if !h.orderTokenValid(c, order) {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "Order not found",
+		})
+	}
+
+	return c.JSON(publicOrder{
+		ID:        order.ID,
+		Status:    order.Status,
+		Total:     order.Total,
+		CreatedAt: order.CreatedAt,
+	})
+}
+
+// AdminGetOrderByID returns the full order for the dashboard.
+func (h *OrderHandler) AdminGetOrderByID(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -963,14 +1063,42 @@ func (h *OrderHandler) GetOrderByID(c *fiber.Ctx) error {
 	return c.JSON(order)
 }
 
-// cancel order handler: only pending orders can be cancelled, and the stock
-// held by the order is released back to the catalog.
+// CancelOrder is the guest cancel endpoint. Only pending orders can be
+// cancelled, and the request must carry the order token.
 func (h *OrderHandler) CancelOrder(c *fiber.Ctx) error {
+	return h.cancelOrder(c, true)
+}
+
+// AdminCancelOrder lets a signed-in operator cancel a pending order.
+func (h *OrderHandler) AdminCancelOrder(c *fiber.Ctx) error {
+	return h.cancelOrder(c, false)
+}
+
+func (h *OrderHandler) cancelOrder(c *fiber.Ctx, requireToken bool) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Invalid order id",
 		})
+	}
+
+	if requireToken {
+		current, err := h.orderRepo.FindByID(id)
+		if err != nil {
+			if errors.Is(err, repository.ErrOrderNotFound) {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+					"error": "Order not found",
+				})
+			}
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "Internal server error",
+			})
+		}
+		if !h.orderTokenValid(c, current) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error": "Order not found",
+			})
+		}
 	}
 
 	// atomic transition acts as the idempotency guard: a second cancel finds the

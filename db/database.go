@@ -68,6 +68,8 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS courier_service TEXT NOT NULL DEFAUL
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipment JSONB;
 -- refund issued through the payment gateway
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS refund JSONB;
+-- guest secret for the order page, invoice and cancel endpoint
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS access_token TEXT NOT NULL DEFAULT '';
 -- automatic shipment retries: how many provider attempts were made and when
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipment_attempts INT NOT NULL DEFAULT 0;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipment_last_attempt_at TIMESTAMPTZ;

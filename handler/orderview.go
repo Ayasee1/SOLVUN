@@ -43,6 +43,7 @@ type orderPageView struct {
 	Steps               []orderStep
 	Events              []orderEvent
 	ShipmentStatusLabel string
+	InvoiceURL          string
 }
 
 type orderStep struct {
@@ -68,6 +69,12 @@ func (h *OrderHandler) OrderPageView(c *fiber.Ctx) error {
 	order, err := h.orderRepo.FindByID(id)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).SendString("Order not found")
+	}
+
+	// The id alone is not enough: the page carries contact details and payment
+	// credentials, so it requires the guest token from the email or checkout.
+	if !h.orderTokenValid(c, order) {
+		return c.Status(fiber.StatusNotFound).SendString("This order link is not valid. Open the link from your email, or use the tracking page.")
 	}
 
 	// Webhooks cannot reach localhost/tunnels that changed. Reconcile pending
@@ -121,14 +128,28 @@ func (h *OrderHandler) trackOrder(c *fiber.Ctx) error {
 		return c.Redirect("/track?error=1")
 	}
 
-	return c.Redirect("/order/" + order.ID.String())
+	// Email verification is proof of ownership, so hand the browser a working
+	// link. Older orders have no token yet: issue one now.
+	if order.AccessToken == "" {
+		token, err := newAccessToken()
+		if err != nil {
+			return c.Redirect("/track?error=1")
+		}
+		if err := h.orderRepo.SetAccessToken(order.ID, token); err != nil {
+			return c.Redirect("/track?error=1")
+		}
+		order.AccessToken = token
+	}
+
+	return c.Redirect("/order/" + order.ID.String() + "?t=" + url.QueryEscape(order.AccessToken))
 }
 
 func (h *OrderHandler) orderView(order *model.UserOrder) orderPageView {
 	view := orderPageView{
-		UserOrder: *order,
-		StoreLat:  h.storeLat,
-		StoreLon:  h.storeLon,
+		UserOrder:  *order,
+		StoreLat:   h.storeLat,
+		StoreLon:   h.storeLon,
+		InvoiceURL: h.invoiceURL(*order),
 	}
 	view.resolveMapDestination(order)
 

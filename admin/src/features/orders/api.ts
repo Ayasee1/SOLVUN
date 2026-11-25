@@ -37,9 +37,9 @@ export function fetchOrder(id: string) {
   return api.get<Order>(`/admin/orders/${id}`)
 }
 
-// cancel is part of the guest flow (only pending orders can be cancelled)
+// cancel goes through the admin route (the guest route needs the order token)
 export function cancelOrder(id: string) {
-  return api.post<Order>(`/orders/${id}/cancel`)
+  return api.post<Order>(`/admin/orders/${id}/cancel`)
 }
 
 // retryShipment asks the API to create the provider shipment for a paid order
