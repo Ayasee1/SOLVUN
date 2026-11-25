@@ -116,6 +116,7 @@ func buildAppWithShipping(provider shipping.Provider) (*fiber.App, *fakeGateway,
 
 	productRepo := repository.NewMemoryProductRepository()
 	orderRepo := repository.NewMemoryOrderRepository()
+	orderRepo.SetProducts(productRepo)
 	gw := &fakeGateway{}
 	mailer := &fakeMailer{}
 

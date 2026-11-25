@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -20,15 +21,39 @@ type OrderRepository interface {
 	FindByID(id uuid.UUID) (*model.UserOrder, error)
 	TransitionStatus(id uuid.UUID, from, to model.OrderStatus) (*model.UserOrder, bool, error)
 	TransitionStatusWithPayment(id uuid.UUID, from, to model.OrderStatus, info model.PaymentInfo) (*model.UserOrder, bool, error)
+	// SettlePaid claims the order for a confirmed payment. When reserveStock is
+	// true, the stock is reserved in the same unit of work: the order becomes
+	// either paid with all of it reserved, or needs_refund with none of it
+	// touched. That is what keeps a crash from leaving a paid order without
+	// stock (or stock without a paid order).
+	SettlePaid(id uuid.UUID, from model.OrderStatus, info model.PaymentInfo, stock map[int]int, reserveStock bool) (*model.UserOrder, SettleOutcome, error)
 	SetShipment(id uuid.UUID, info model.ShipmentInfo) error
 	FindByShipmentProviderID(providerID string) (*model.UserOrder, error)
 	Delete(id uuid.UUID) (model.UserOrder, error)
 }
 
+// SettleOutcome reports what SettlePaid did.
+type SettleOutcome string
+
+const (
+	// SettleClaimed: the order is paid and, when requested, its stock is reserved.
+	SettleClaimed SettleOutcome = "claimed"
+	// SettleNeedsRefund: the payment was recorded, but the stock was gone, so the
+	// order is flagged for a manual refund.
+	SettleNeedsRefund SettleOutcome = "needs_refund"
+	// SettleNotClaimed: the order was not in the expected status (another
+	// notification or the sweeper got there first).
+	SettleNotClaimed SettleOutcome = "not_claimed"
+)
+
 // MemoryOrderRepository is the in-memory implementation used for dev and tests.
 type MemoryOrderRepository struct {
 	mu     sync.RWMutex
 	orders []model.UserOrder
+	// products is set once at startup so settlement can reserve stock. Only the
+	// Postgres implementation is atomic; in memory the two steps just run in
+	// sequence, which is fine for dev and tests.
+	products ProductRepository
 }
 
 var _ OrderRepository = (*MemoryOrderRepository)(nil)
@@ -37,6 +62,11 @@ func NewMemoryOrderRepository() *MemoryOrderRepository {
 	return &MemoryOrderRepository{
 		orders: []model.UserOrder{},
 	}
+}
+
+// SetProducts wires the catalog used by SettlePaid. Call it once at startup.
+func (r *MemoryOrderRepository) SetProducts(products ProductRepository) {
+	r.products = products
 }
 
 func (r *MemoryOrderRepository) Save(order model.UserOrder) error {
@@ -138,6 +168,35 @@ func (r *MemoryOrderRepository) TransitionStatusWithPayment(id uuid.UUID, from, 
 	}
 
 	return nil, false, ErrOrderNotFound
+}
+
+// SettlePaid claims the order and then reserves the stock. The in-memory
+// version runs both steps under separate locks; only the Postgres version is a
+// single transaction, which is what production uses.
+func (r *MemoryOrderRepository) SettlePaid(id uuid.UUID, from model.OrderStatus, info model.PaymentInfo, stock map[int]int, reserveStock bool) (*model.UserOrder, SettleOutcome, error) {
+	order, confirmed, err := r.TransitionStatusWithPayment(id, from, model.OrderStatusPaid, info)
+	if err != nil {
+		return nil, "", err
+	}
+	if !confirmed {
+		return order, SettleNotClaimed, nil
+	}
+	if !reserveStock {
+		return order, SettleClaimed, nil
+	}
+	if r.products == nil {
+		return nil, "", errors.New("memory settlement requires a product repository")
+	}
+
+	if err := r.products.DecreaseStock(stock); err != nil {
+		updated, _, terr := r.TransitionStatusWithPayment(id, model.OrderStatusPaid, model.OrderStatusNeedsRefund, info)
+		if terr != nil {
+			return nil, "", terr
+		}
+		return updated, SettleNeedsRefund, nil
+	}
+
+	return order, SettleClaimed, nil
 }
 
 // SetShipment stores the provider shipment details on the order.

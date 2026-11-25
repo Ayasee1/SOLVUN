@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -169,6 +170,88 @@ func (r *PostgresOrderRepository) TransitionStatusWithPayment(id uuid.UUID, from
 		return nil, false, ferr
 	}
 	return current, false, nil
+}
+
+// SettlePaid claims the order and reserves stock in one transaction. Either the
+// order ends up paid with every item reserved, or needs_refund with no product
+// touched; a crash can never leave the two halves out of sync.
+func (r *PostgresOrderRepository) SettlePaid(id uuid.UUID, from model.OrderStatus, info model.PaymentInfo, stock map[int]int, reserveStock bool) (*model.UserOrder, SettleOutcome, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+
+	payment, err := marshalPayment(&info)
+	if err != nil {
+		return nil, "", err
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	// No-op after a successful commit.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	order, err := scanOrder(tx.QueryRow(ctx,
+		`UPDATE orders SET status = $3, payment = $4 WHERE id = $1 AND status = $2 RETURNING `+orderColumns,
+		id, from, model.OrderStatusPaid, payment))
+	if err != nil {
+		if !errors.Is(err, ErrOrderNotFound) {
+			return nil, "", err
+		}
+		// Nothing was claimed: report the current state so the caller can retry
+		// against the status that actually won.
+		_ = tx.Rollback(ctx)
+		current, ferr := r.FindByID(id)
+		if ferr != nil {
+			return nil, "", ferr
+		}
+		return current, SettleNotClaimed, nil
+	}
+
+	if reserveStock {
+		// Lock products in a stable order so two settlements cannot deadlock.
+		ids := make([]int, 0, len(stock))
+		for productID := range stock {
+			ids = append(ids, productID)
+		}
+		sort.Ints(ids)
+
+		for _, productID := range ids {
+			var available int
+			err := tx.QueryRow(ctx, `SELECT stock FROM products WHERE id = $1 FOR UPDATE`, productID).Scan(&available)
+			if errors.Is(err, pgx.ErrNoRows) || (err == nil && available < stock[productID]) {
+				// Turn the claim into a refund flag inside the same transaction,
+				// so no product row has been changed and nothing is half done.
+				if _, uerr := tx.Exec(ctx,
+					`UPDATE orders SET status = $3 WHERE id = $1 AND status = $2`,
+					id, model.OrderStatusPaid, model.OrderStatusNeedsRefund); uerr != nil {
+					return nil, "", uerr
+				}
+				if cerr := tx.Commit(ctx); cerr != nil {
+					return nil, "", cerr
+				}
+				order.Status = model.OrderStatusNeedsRefund
+				return order, SettleNeedsRefund, nil
+			}
+			if err != nil {
+				return nil, "", err
+			}
+		}
+
+		for _, productID := range ids {
+			if _, err := tx.Exec(ctx,
+				`UPDATE products SET stock = stock - $1, is_available = (stock - $1) > 0, updated_at = now() WHERE id = $2`,
+				stock[productID], productID); err != nil {
+				return nil, "", err
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, "", err
+	}
+
+	return order, SettleClaimed, nil
 }
 
 func (r *PostgresOrderRepository) SetShipment(id uuid.UUID, info model.ShipmentInfo) error {

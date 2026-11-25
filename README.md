@@ -119,6 +119,9 @@ previous run for that branch.
 - `--frozen-lockfile` fails the build when `package.json` and the lockfile
   disagree, which catches a forgotten `bun install`.
 - The Go job uses the version in `go.mod` and enables the module cache.
+- The backend job starts a disposable `postgres:16` service and exposes it as
+  `TEST_DATABASE_URL`, so the settlement transaction and its concurrency run
+  against real Postgres on every PR.
 - Artifacts are kept for 7 days. They are build outputs only; nothing is
   deployed by this workflow.
 - `main` is protected by a repository ruleset (`main: require CI and pull
@@ -234,9 +237,10 @@ already ran locally.
    fan out into thousands of catalog lookups.
 2. Midtrans calls `POST /orders/notification`. The API verifies the
    `signature_key` when `MIDTRANS_SERVER_KEY` is set, re-reads the transaction
-   from Midtrans, checks the amount, then claims the order before touching
-   stock. The claim is a compare-and-set, so duplicate notifications and a
-   sweeper expiring the order at the same moment cannot both win.
+   from Midtrans, checks the amount, then claims the order and reserves its
+   stock in one transaction. Either the order becomes `paid` with every item
+   reserved, or `needs_refund` with no stock touched; a crash cannot leave the
+   two halves out of sync.
 3. A paid order creates a shipment through the configured shipping provider.
 4. Unpaid orders are expired by the sweeper after `ORDER_PENDING_TTL_MINUTES`
    and their stock is released. Before expiring, the sweeper asks Midtrans for
@@ -372,9 +376,9 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
   Biteship does not sign its calls, so the endpoint relies on re-reading the
   provider state plus the rate limit. A shared secret in the webhook URL would
   add a real gate.
-- Settlement claims the order and then reserves stock as two writes, not one DB
-  transaction. A crash between them leaves a paid order whose stock was not
-  re-reserved; the window is small but real.
+- Settlement claims the order and reserves stock in one Postgres transaction.
+  The in-memory repository used for dev runs the two steps in sequence, so it is
+  not crash-atomic; production uses the transactional path.
 - `needs_refund` is a flag, not an integration: refunds are still issued by hand
   in the Midtrans dashboard.
 - A failed shipment can be retried from the order page, but there is no

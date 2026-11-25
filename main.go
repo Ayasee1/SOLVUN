@@ -61,8 +61,11 @@ func main() {
 	if cfg.DatabaseURL == "" {
 		// no database configured -> in-memory (dev/tests)
 		log.Println("DATABASE_URL is empty, using in-memory repositories")
-		productRepo = repository.NewMemoryProductRepository()
-		orderRepo = repository.NewMemoryOrderRepository()
+		memoryProducts := repository.NewMemoryProductRepository()
+		memoryOrders := repository.NewMemoryOrderRepository()
+		memoryOrders.SetProducts(memoryProducts)
+		productRepo = memoryProducts
+		orderRepo = memoryOrders
 	} else {
 		pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 		if err != nil {
