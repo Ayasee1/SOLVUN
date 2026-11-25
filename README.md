@@ -1,21 +1,34 @@
 # Solvun
 
-Solvun is a small storefront stack: a Go/Fiber API, a React storefront, and a
-React admin dashboard.
+A small storefront stack: a Go/Fiber API, a React storefront, and a React admin
+dashboard for a single operator.
 
-| Path       | What it is                                              |
-| ---------- | ------------------------------------------------------- |
-| `main.go`  | Go API (products, orders, payments, shipping, emails)   |
-| `web/`     | Customer storefront (Vite + React + TanStack Router)     |
-| `admin/`   | Admin dashboard (Vite + React + TanStack Router)         |
-| `catalog/` | Product content seeded into Postgres on startup          |
+```
+main.go            API entry point (config, routing, graceful shutdown)
+cmd/hashpw/        prints the bcrypt hash for ADMIN_PASSWORD_HASH
+catalog/           product content seeded into Postgres on startup
+handler/           HTTP handlers (products, orders, payments, shipping, admin auth)
+middleware/        admin session guard
+repository/        in-memory and Postgres repositories
+payment/           Midtrans client
+shipping/          Biteship / flat-rate providers
+notification/      email senders (Resend, SMTP, log)
+invoice/           PDF invoice rendering
+sweeper/           expires unpaid orders and releases reserved stock
+session/           in-memory admin session store
+db/                schema migration
+routes/            route table
+web/               customer storefront (Vite + React + TanStack Router)
+admin/             admin dashboard (Vite + React + TanStack Router)
+deploy/            nginx config and deployment steps
+```
 
 ## Requirements
 
 - Go 1.26+
-- Node 20+ and Bun 1.3+
-- Postgres (optional in development; without `DATABASE_URL` the API uses
-  in-memory repositories and data is lost on restart)
+- Bun 1.3+ (pinned in both `package.json` files as `packageManager`)
+- Postgres — optional in development. Without `DATABASE_URL` the API uses
+  in-memory repositories and all data is lost on restart.
 
 ## Setup
 
@@ -31,52 +44,51 @@ Create the admin password hash:
 go run ./cmd/hashpw          # prompts for the password
 ```
 
-Copy the printed bcrypt hash into `ADMIN_PASSWORD_HASH`. Admin sign-in is
-disabled while `ADMIN_EMAIL` or `ADMIN_PASSWORD_HASH` is empty.
+Copy the printed bcrypt hash into `ADMIN_PASSWORD_HASH`. Admin sign-in stays
+disabled while `ADMIN_EMAIL` or `ADMIN_PASSWORD_HASH` is empty; the API logs a
+warning at startup in that case.
 
-### Run the API
+## Run locally
 
-```bash
-go run .
-```
+| Service | Command | URL |
+| --- | --- | --- |
+| API | `go run .` | `http://localhost:3000` |
+| Storefront | `cd web && bun install && bun run dev` | `http://localhost:5174` |
+| Admin | `cd admin && bun install && bun run dev` | `http://localhost:5173` |
 
-The API listens on `PORT` (default `3000`). When `DATABASE_URL` is set, the
-schema is created and the catalog is seeded automatically at startup.
+When `DATABASE_URL` is set, the schema is created and the catalog is seeded at
+startup. Both dev servers proxy `/api` to the Go API, so the browser sees a
+single origin and no CORS is involved. The storefront also proxies
+`/order`, `/orders`, and `/track`, which the Go app renders as HTML.
 
-### Run the storefront
+Sign in to the dashboard with the `ADMIN_EMAIL` / password pair configured on
+the API. The dashboard stores nothing in the browser: the API sets an HttpOnly
+session cookie and the router asks `GET /admin/session` whether it is still
+valid.
 
-```bash
-cd web
-bun install
-bun run dev
-```
-
-The dev server runs on `http://localhost:5174` and proxies `/api`, `/order`,
-`/orders`, and `/track` to the Go API.
-
-### Run the admin dashboard
-
-```bash
-cd admin
-bun install
-bun run dev
-```
-
-Sign in with the `ADMIN_EMAIL` / password pair configured on the API. The
-dashboard stores nothing in the browser: the API sets an HttpOnly session
-cookie and the router asks `GET /admin/session` whether it is still valid.
-
-## Tests
+## Checks
 
 ```bash
-go test ./...
+# Backend
+gofmt -l .
 go vet ./...
-```
+go test ./...
+go test -race -count=1 ./...
 
-```bash
+# Storefront (tsc + vite build)
 cd web && bun run build
+
+# Admin
+cd admin && bun run lint
+cd admin && bun run format:check
+cd admin && bun run build
+cd admin && bun run test:browser:install   # once, downloads Chromium
 cd admin && bun run test
 ```
+
+If Vitest reports a missing browser, re-run `bun run test:browser:install` in
+`admin/`: the Playwright cache is shared with other projects on the machine and
+an install elsewhere can remove the revision this project pinned.
 
 ## Continuous integration
 
@@ -84,25 +96,22 @@ cd admin && bun run test
 can be triggered manually from the Actions tab. A push to a branch cancels the
 previous run for that branch.
 
-| Job            | What it does                                                                 |
-| -------------- | ---------------------------------------------------------------------------- |
-| `backend`      | `gofmt -l`, `go vet`, `go test -race -count=1 ./...`, `go build ./...`        |
-| `storefront`   | `bun install --frozen-lockfile`, `bun run build`, uploads `web/dist`          |
-| `admin`        | `bun install --frozen-lockfile`, `bun run lint`, `format:check`, build, uploads `admin/dist` |
-| `admin-tests`  | installs Playwright Chromium, runs the Vitest browser suite                   |
-| `ci`           | aggregate gate: fails if any of the jobs above did not succeed                |
-
-Notes:
+| Job | What it does |
+| --- | --- |
+| `backend` | `gofmt -l`, `go vet`, `go test -race -count=1 ./...`, `go build ./...` |
+| `storefront` | `bun install --frozen-lockfile`, `bun run build`, uploads `web/dist` |
+| `admin` | `bun install --frozen-lockfile`, `bun run lint`, `format:check`, build, uploads `admin/dist` |
+| `admin-tests` | installs Playwright Chromium, runs the Vitest browser suite |
+| `ci` | aggregate gate: fails if any of the jobs above did not succeed |
 
 - The frontend jobs use Bun `1.3.14` (pinned in `env.BUN_VERSION`) and cache
-  `~/.bun/install/cache` keyed on the matching `bun.lock`, so installs are fast
-  and reproducible.
+  `~/.bun/install/cache` keyed on the matching `bun.lock`.
 - `--frozen-lockfile` fails the build when `package.json` and the lockfile
-  disagree, which catches forgotten `bun install` runs.
+  disagree, which catches a forgotten `bun install`.
 - The Go job uses the version in `go.mod` and enables the module cache.
 - Artifacts are kept for 7 days. They are build outputs only; nothing is
   deployed by this workflow.
-- Keep the `ci` job as the single required status check in branch protection so
+- Keep the `ci` job as the single required status check in branch protection, so
   adding or reordering jobs does not break the rule.
 
 ## Order lifecycle
@@ -115,26 +124,38 @@ Notes:
 4. Unpaid orders are expired by the sweeper after `ORDER_PENDING_TTL_MINUTES`
    and their stock is released.
 
-Order statuses: `pending`, `paid`, `expired`, `cancelled`, `needs_refund`.
+Statuses: `pending`, `paid`, `expired`, `cancelled`, `needs_refund`.
 
-## Configuration
+## API surface
 
-All variables are documented in `.env.example`. The most important ones:
+Public, consumed by the storefront:
 
-| Variable                      | Purpose                                              |
-| ----------------------------- | ---------------------------------------------------- |
-| `DATABASE_URL`                | Postgres DSN; empty uses in-memory repositories       |
-| `ADMIN_EMAIL`                 | Operator email for `/admin`; empty disables sign-in   |
-| `ADMIN_PASSWORD_HASH`         | bcrypt hash from `go run ./cmd/hashpw`               |
-| `ADMIN_SESSION_TTL_MINUTES`   | Admin session lifetime (default 720)                 |
-| `ADMIN_COOKIE_SECURE`         | Mark the session cookie `Secure` (default `true`)    |
-| `MIDTRANS_*`                  | Snap client/server keys and environment               |
-| `ORDER_PENDING_TTL_MINUTES`   | How long unpaid orders keep stock reserved (default 20) |
-| `ORDER_SWEEP_INTERVAL_SECONDS`| Sweeper interval (default 60)                         |
-| `SHIPPING_PROVIDER`           | `biteship`, `flat`, or `disabled`                     |
-| `STORE_BASE_URL`              | Public store URL used in payment redirects and emails |
-| `CORS_ORIGINS`                | Comma-separated allowed browser origins               |
-| `TRUST_PROXY`                 | Read client IP from `X-Forwarded-For` (nginx on host) |
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | liveness/readiness probe |
+| `GET` | `/store/config` | Midtrans client key and environment |
+| `GET` | `/products`, `/products/:id` | catalog |
+| `POST` | `/cart` | price and availability check |
+| `POST` | `/shipping/rates` | courier quotes |
+| `POST` | `/orders` | create order and Snap transaction |
+| `GET` | `/orders/:id` | public order status |
+| `GET` | `/orders/:id/invoice.pdf` | invoice PDF |
+| `POST` | `/orders/:id/cancel` | cancel a pending order |
+| `GET`/`POST` | `/order/:id`, `/track` | HTML order and tracking pages |
+| `POST` | `/orders/notification` | Midtrans webhook |
+| `POST` | `/shipping/notification` | Biteship webhook |
+
+Admin, all requiring a session:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/admin/session` | sign in |
+| `GET` | `/admin/session` | session status |
+| `DELETE` | `/admin/session` | sign out |
+| `GET` | `/admin/orders`, `/admin/orders/:id` | order list and detail |
+| `GET` | `/admin/products` | product list, including hidden ones |
+| `PATCH` | `/admin/products/:id` | price, stock, visibility |
+| `DELETE` | `/admin/products/:id` | remove a product |
 
 ## Admin sign-in
 
@@ -145,21 +166,44 @@ environment instead of a user table.
    sets `solvun_admin_session`: `HttpOnly`, `SameSite=Lax`, `Secure` by default.
 2. `GET /admin/session` tells the dashboard whether the cookie is still valid.
 3. `DELETE /admin/session` revokes the token and clears the cookie.
-4. Every `/admin/*` route requires a live session. There is no API key in the
-   frontend bundle.
+4. Every `/admin/*` route requires a live session. The token is never readable
+   from JavaScript, and no API key is compiled into the frontend bundle.
 
 Sessions are stored in memory, so restarting the API signs the operator out.
-Failed sign-ins are limited to 5 attempts per client per 15 minutes.
+Failed sign-ins are limited to 5 per client per 15 minutes; nginx adds a second
+limit on `POST /api/admin/session` in production.
 
-## Deployment notes
+Because the cookie is `SameSite=Lax`, the dashboard and the API must be served
+from the same site. Serving both subdomains behind one nginx host (as `deploy/`
+does) satisfies this.
+
+## Configuration
+
+All variables are documented in `.env.example`. The most important ones:
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Postgres DSN; empty uses in-memory repositories |
+| `ADMIN_EMAIL` | operator email for `/admin`; empty disables sign-in |
+| `ADMIN_PASSWORD_HASH` | bcrypt hash from `go run ./cmd/hashpw` |
+| `ADMIN_SESSION_TTL_MINUTES` | admin session lifetime (default 720) |
+| `ADMIN_COOKIE_SECURE` | mark the session cookie `Secure` (default `true`) |
+| `MIDTRANS_*` | Snap client/server keys and environment |
+| `ORDER_PENDING_TTL_MINUTES` | how long unpaid orders keep stock reserved (default 20) |
+| `ORDER_SWEEP_INTERVAL_SECONDS` | sweeper interval (default 60) |
+| `SHIPPING_PROVIDER` | `biteship`, `flat`, or `disabled` |
+| `STORE_BASE_URL` | public store URL used in payment redirects and emails |
+| `CORS_ORIGINS` | comma-separated allowed browser origins |
+| `TRUST_PROXY` | read client IP from `X-Forwarded-For` (nginx on host) |
+
+## Deployment
 
 A ready-to-use nginx setup lives in `deploy/`: one host, `shop.` and `admin.`
 subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 `deploy/README.md` for DNS, certificates, upload commands, and verification.
 
-- The storefront and admin call the API through `/api`; the proxy strips that
-  prefix and forwards `/order`, `/orders`, and `/track` untouched because the Go
-  app renders those pages.
+- The proxy strips `/api` and forwards `/order`, `/orders`, and `/track`
+  untouched, because the Go app renders those pages.
 - Set `CORS_ORIGINS` to the real store/admin origins; the default is `*`.
 - Set `TRUST_PROXY=true` when nginx runs on the same host, so logs and the
   sign-in limiter see the real client IP.
@@ -167,10 +211,20 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
   `/orders/notification` and `/shipping/notification`.
 - Back up the database before deploying: migrations run at startup and are not
   rolled back automatically.
+- The deployment recipe in `.monocode/` is gitignored, so it lives only on the
+  machine that deploys.
 
 ## Known gaps
 
 - Admin sessions live in memory: a restart signs the operator out, and running
-  more than one API instance would require a shared session store.
-- No rate limiting on public endpoints yet (only admin sign-in is limited).
-- Admin lists load every order/product (no pagination).
+  more than one API instance would need a shared session store.
+- Public endpoints have no rate limiting yet. Only admin sign-in is limited
+  (app-level plus nginx), so `POST /orders`, `/shipping/rates`, and the webhooks
+  can be called as fast as a client likes.
+- Admin lists load every row. Orders accept a `?status=` filter, but there is no
+  pagination anywhere and the product list is filtered in the browser.
+- `GET /orders/:id` is a capability URL: anyone holding the link can read the
+  order, including customer details. UUIDs make guessing impractical, but the
+  link should still be treated as a secret.
+- Nothing is deployed by CI. The workflow validates a commit; shipping it is
+  still a manual `rsync` plus service restart.
