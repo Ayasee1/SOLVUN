@@ -378,6 +378,7 @@ All variables are documented in `.env.example`. The most important ones:
 | `SHIPMENT_RETRY_ENABLED` | retry failed shipment creation in the background (default `true`) |
 | `SHIPMENT_RETRY_MAX_ATTEMPTS` | attempts per order before giving up (default 5) |
 | `SHIPMENT_RETRY_INTERVAL_MINUTES` | delay between attempts and the job interval (default 10) |
+| `BITESHIP_WEBHOOK_TOKEN` | shared secret required on the shipping webhook |
 
 ## Deployment
 
@@ -391,7 +392,8 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 - Set `TRUST_PROXY=true` when nginx runs on the same host, so logs and the
   sign-in limiter see the real client IP.
 - Point Midtrans and Biteship webhooks at the public API:
-  `/orders/notification` and `/shipping/notification`.
+  `/orders/notification` and
+  `/shipping/notification?token=<BITESHIP_WEBHOOK_TOKEN>`.
 - Back up the database before deploying: migrations run at startup and are not
   rolled back automatically.
 - The deployment recipe in `.monocode/` is gitignored, so it lives only on the
@@ -401,10 +403,10 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 
 - Admin sessions live in memory: a restart signs the operator out, and running
   more than one API instance would need a shared session store.
-- Webhook handlers do not verify a provider signature on the shipping side:
-  Biteship does not sign its calls, so the endpoint relies on re-reading the
-  provider state plus the rate limit. A shared secret in the webhook URL would
-  add a real gate.
+- Biteship does not sign its webhooks. With `BITESHIP_WEBHOOK_TOKEN` set, the
+  URL carries a shared secret and the payload is still re-read from the provider:
+  anyone who learns the URL can trigger a status refresh, but cannot forge a
+  state.
 - Settlement claims the order and reserves stock in one Postgres transaction.
   The in-memory repository used for dev runs the two steps in sequence, so it is
   not crash-atomic; production uses the transactional path.

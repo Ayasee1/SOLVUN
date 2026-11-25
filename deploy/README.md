@@ -132,6 +132,13 @@ CORS_ORIGINS=https://shop.example.com,https://admin.example.com
 ADMIN_EMAIL=owner@example.com
 ADMIN_PASSWORD_HASH=<output of: go run ./cmd/hashpw>
 ADMIN_COOKIE_SECURE=true
+
+# Shared secret for the Biteship webhook (see step 6).
+BITESHIP_WEBHOOK_TOKEN=<random string>
+
+# Retry failed shipments and email a digest of orders that need a human.
+SHIPMENT_RETRY_ENABLED=true
+OPS_EMAIL=owner@example.com
 ```
 
 `TRUST_PROXY=true` is safe only because the API listens on `127.0.0.1` and
@@ -146,7 +153,7 @@ Point the providers at the public host, not at the internal port:
 | Provider | URL |
 | --- | --- |
 | Midtrans | `https://shop.example.com/api/orders/notification` |
-| Biteship | `https://shop.example.com/api/shipping/notification` |
+| Biteship | `https://shop.example.com/api/shipping/notification?token=<BITESHIP_WEBHOOK_TOKEN>` |
 
 ## 7. Verify
 

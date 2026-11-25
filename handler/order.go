@@ -51,6 +51,8 @@ type OrderHandler struct {
 	// paymentServerKey enables Midtrans signature verification on the webhook.
 	// Empty disables it, which keeps local sandbox setups working.
 	paymentServerKey string
+	// shippingWebhookToken, when set, is required on the shipping webhook.
+	shippingWebhookToken string
 	// shipmentLocks serialize shipment creation per order. The settlement path,
 	// the admin button, and the background retrier all go through createShipment;
 	// calling the provider twice would create two shipments. Sharded so the map
@@ -80,6 +82,13 @@ func (h *OrderHandler) SetStoreOrigin(lat, lon float64, address string) {
 // is the same Midtrans server key used for API calls.
 func (h *OrderHandler) SetPaymentServerKey(key string) {
 	h.paymentServerKey = key
+}
+
+// SetShippingWebhookToken requires the given token on the shipping webhook, via
+// ?token= or the X-Webhook-Token header. Empty leaves the endpoint open, which is
+// only acceptable in development.
+func (h *OrderHandler) SetShippingWebhookToken(token string) {
+	h.shippingWebhookToken = token
 }
 
 // orderPageURL is the public page the customer can open to follow the order.
@@ -607,6 +616,20 @@ func (h *OrderHandler) sendPaidEmail(order model.UserOrder) {
 // The payload is never trusted: the real state is re-read from the provider,
 // the same pattern used for Midtrans.
 func (h *OrderHandler) ShippingNotification(c *fiber.Ctx) error {
+	// Biteship does not sign its webhooks, so a shared secret is the gate. The
+	// token travels in the URL because the dashboard only lets us set the URL.
+	if h.shippingWebhookToken != "" {
+		provided := c.Query("token")
+		if provided == "" {
+			provided = c.Get("X-Webhook-Token")
+		}
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(h.shippingWebhookToken)) != 1 {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Invalid webhook token",
+			})
+		}
+	}
+
 	var payload struct {
 		Event     string `json:"event"`
 		OrderID   string `json:"order_id"`

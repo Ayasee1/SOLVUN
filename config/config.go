@@ -75,6 +75,10 @@ type Config struct {
 	ShipmentRetryEnabled         bool
 	ShipmentRetryMaxAttempts     int
 	ShipmentRetryIntervalMinutes int
+	// BiteshipWebhookToken, when set, is required on the shipping webhook via
+	// ?token= or the X-Webhook-Token header. Biteship does not sign payloads, so
+	// this shared secret is the gate that keeps random callers out.
+	BiteshipWebhookToken string
 }
 
 // Load reads configuration from the environment, falling back to safe defaults.
@@ -105,6 +109,8 @@ func Load() Config {
 		ShipmentRetryEnabled:         getEnvBool("SHIPMENT_RETRY_ENABLED", true),
 		ShipmentRetryMaxAttempts:     getEnvInt("SHIPMENT_RETRY_MAX_ATTEMPTS", 5),
 		ShipmentRetryIntervalMinutes: getEnvInt("SHIPMENT_RETRY_INTERVAL_MINUTES", 10),
+
+		BiteshipWebhookToken: strings.TrimSpace(os.Getenv("BITESHIP_WEBHOOK_TOKEN")),
 
 		ResendAPIKey: os.Getenv("RESEND_API_KEY"),
 		SMTPHost:     os.Getenv("SMTP_HOST"),
