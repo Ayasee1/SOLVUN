@@ -66,6 +66,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Settlement transaction (Postgres)
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/solvun_test?sslmode=disable
+        run: go test -count=1 -v -run TestPostgres ./repository/
+
       - name: Test (race detector)
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/solvun_test?sslmode=disable
