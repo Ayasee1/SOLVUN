@@ -439,6 +439,7 @@ subdomains, `/api` proxied to the Go service on `127.0.0.1:3001`. See
 Once the repository is configured, every green push to `main` deploys itself
 (see Continuous deployment). Uploaded product images live under
 `/var/www/solvun/media` and are not part of a deploy; back that directory up.
+For the first deployment, follow the **Go-live checklist** below.
 
 - The proxy strips `/api` and forwards `/order`, `/orders`, and `/track`
   untouched, because the Go app renders those pages.
@@ -452,6 +453,86 @@ Once the repository is configured, every green push to `main` deploys itself
   rolled back automatically.
 - The deployment recipe in `.monocode/` is gitignored, so it lives only on the
   machine that deploys.
+
+## Go-live checklist
+
+Execution order for the first day. `deploy/README.md` has the long version; this
+is the short list, including the things that are easy to forget.
+
+### 1. Server
+
+```bash
+git clone https://github.com/Ayasee1/SOLVUN.git ~/developer/golearn-staging
+
+sudo mkdir -p /var/www/solvun/web /var/www/solvun/admin /var/www/solvun/media
+sudo chown -R "$USER": /var/www/solvun
+
+systemctl --user enable golearn-staging
+loginctl enable-linger "$USER"
+
+ssh-keygen -t ed25519 -C github-actions-deploy -f ~/.ssh/deploy_key -N ""
+cat ~/.ssh/deploy_key.pub >> ~/.ssh/authorized_keys
+ssh-keyscan -H <server-host> # paste into DEPLOY_KNOWN_HOSTS
+```
+
+- [ ] DNS `shop.` and `admin.` point at the server.
+- [ ] nginx config installed and certificates issued (deploy/README steps 3–4).
+- [ ] The final config includes `location /media/` on **both** hosts.
+- [ ] The service unit exists and `ExecStart` points at `golearn` in the clone.
+
+### 2. Service environment
+
+```env
+DATABASE_URL=postgres://...
+ADMIN_EMAIL=owner@example.com
+ADMIN_PASSWORD_HASH=<go run ./cmd/hashpw>
+
+MEDIA_DIR=/var/www/solvun/media
+STORE_BASE_URL=https://shop.example.com
+CORS_ORIGINS=https://shop.example.com,https://admin.example.com
+TRUST_PROXY=true
+RATE_LIMIT_ENABLED=true
+
+BITESHIP_WEBHOOK_TOKEN=<random>
+OPS_EMAIL=owner@example.com
+
+MIDTRANS_* + SHIPPING_* (sandbox first)
+```
+
+- [ ] `ORDER_PENDING_TTL_MINUTES` is at or above `MIDTRANS_EXPIRY_MINUTES`.
+- [ ] `MEDIA_DIR/products` is writable by the service user (uploads return `503`
+      when `MEDIA_DIR` is empty, and nginx returns `403` if the files are `0600`).
+- [ ] `TRUST_PROXY=true` only because nginx is the sole client of `:3001`.
+
+### 3. GitHub (CD)
+
+- [ ] Repository variables: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`,
+      `DEPLOY_WEB_ROOT`, `DEPLOY_ADMIN_ROOT`.
+- [ ] Secrets: `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`.
+- [ ] Environment `production` exists (add reviewers only if you want a manual gate).
+- [ ] Merge/push to `main`, then watch **CI** and **Deploy** in Actions. If
+      Deploy is skipped, `DEPLOY_HOST` is not set.
+
+### 4. Smoke test after the first deploy
+
+- [ ] `curl -fsS https://shop.example.com/api/products | head -c 100`
+- [ ] `curl -sI https://shop.example.com/ | grep -iE 'strict-transport|content-security'`
+- [ ] `curl -o /dev/null -w '%{http_code}\n' https://admin.example.com/api/admin/orders` → `401`
+- [ ] Sign in to the dashboard, add a **test product with an uploaded image**,
+      open `/media/products/...` on both hosts, then delete the product.
+- [ ] Sandbox order: pay → webhook marks it paid → shipment is created → email
+      arrives; then cancel a pending order and refund a `needs_refund` one.
+- [ ] `/track` with the order id and the customer email redirects to the order page.
+- [ ] `journalctl --user -u golearn-staging -n 50 --no-pager` is clean.
+
+### 5. Easy to forget
+
+- [ ] `MEDIA_DIR` set **and** the directory owned by the service user.
+- [ ] Biteship webhook URL ends with `?token=<BITESHIP_WEBHOOK_TOKEN>`.
+- [ ] Admin sign-in is disabled while `ADMIN_EMAIL`/`ADMIN_PASSWORD_HASH` are empty.
+- [ ] `STORE_BASE_URL` and `CORS_ORIGINS` use the real HTTPS origins, not `*`.
+- [ ] Backups: Postgres **and** `/var/www/solvun/media` **and** `.env`.
+- [ ] Branch protection still requires the `CI` check.
 
 ## Known gaps
 
